@@ -7,7 +7,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import (
+    config_validation as cv,
+    device_registry as dr,
+    entity_registry as er,
+)
 from homeassistant.helpers.httpx_client import get_async_client
 
 from .api import CannotConnectError, InvalidAuthError, async_validate_daemon
@@ -33,6 +37,8 @@ from .runtime_data import HypercolorRuntimeData
 from .services import async_setup_services
 
 type HypercolorConfigEntry = ConfigEntry[HypercolorRuntimeData]
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:

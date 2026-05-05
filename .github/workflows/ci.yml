@@ -18,7 +18,16 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Check out Hypercolor client
-        run: git clone --depth 1 https://github.com/hyperb1iss/hypercolor ../hypercolor
+        env:
+          HYPERCOLOR_TOKEN: ${{ secrets.HYPERCOLOR_TOKEN }}
+        run: |
+          if [ -n "${HYPERCOLOR_TOKEN}" ]; then
+            git clone --depth 1 \
+              "https://x-access-token:${HYPERCOLOR_TOKEN}@github.com/hyperb1iss/hypercolor.git" \
+              ../hypercolor
+          else
+            git clone --depth 1 https://github.com/hyperb1iss/hypercolor ../hypercolor
+          fi
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
@@ -66,6 +75,9 @@ jobs:
   hacs:
     name: HACS validation
     runs-on: ubuntu-latest
+    # HACS validation walks the public GitHub API, so it can only run while
+    # the repo is public. Flip the repo visibility and this job lights up.
+    if: ${{ github.event.repository.visibility == 'public' }}
     steps:
       - uses: actions/checkout@v5
       - uses: hacs/action@main
@@ -75,7 +87,7 @@ jobs:
   release:
     name: Publish GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [verify, hassfest, hacs]
+    needs: [verify, hassfest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
