@@ -143,6 +143,9 @@ addopts = [
     "--strict-config",
     "-v",
 ]
+markers = [
+    "e2e: integration tests that boot Home Assistant against a daemon",
+]
 filterwarnings = [
     "error",
 ]

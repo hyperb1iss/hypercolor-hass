@@ -20,6 +20,12 @@ typecheck:
 test:
     uv run pytest
 
+e2e:
+    uv run pytest tests/test_hass_e2e.py
+
+e2e-real:
+    HYPERCOLOR_HASS_REAL_E2E=1 uv run pytest tests/test_hass_e2e.py -m e2e
+
 build:
     uv build
 
