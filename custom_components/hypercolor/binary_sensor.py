@@ -127,6 +127,10 @@ def active_effect_audio_reactive(state_data: object, catalog_data: object) -> bo
     active_id = read_field(state_data, "active_effect_id")
     active_name = read_field(state_data, "active_effect")
     for effect in catalog_items(catalog_data, "effects"):
-        if item_id(effect) == active_id or item_name(effect) == active_name:
+        if active_id is not None and item_id(effect) == active_id:
             return bool(read_field(effect, "audio_reactive", False))
+    if active_id is None and active_name:
+        for effect in catalog_items(catalog_data, "effects"):
+            if item_name(effect) == active_name:
+                return bool(read_field(effect, "audio_reactive", False))
     return False

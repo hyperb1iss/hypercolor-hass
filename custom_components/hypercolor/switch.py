@@ -101,4 +101,4 @@ class HypercolorDeviceEnabledSwitch(CoordinatorEntity, SwitchEntity):
 def audio_device_enabled(device_id: Any) -> bool | None:
     if device_id is None:
         return None
-    return str(device_id).lower() not in {"", _AUDIO_DEVICE_NONE}
+    return str(device_id).lower() not in {"", "disabled", _AUDIO_DEVICE_NONE}

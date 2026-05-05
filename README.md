@@ -46,6 +46,13 @@ just hass-check
 
 `just verify` covers Ruff, ty, pytest, integration metadata checks, and wheel construction through `uv_build`. `just hass-check` boots Home Assistant's config validator against the local throwaway config.
 
+## Entity Semantics
+
+The master light reports `effect` using the same display names exposed in Home
+Assistant's effect picker. The daemon's stable identifier remains available as
+the `active_effect_id` extra state attribute for templates and automations that
+need an id instead of a label.
+
 ## Audio Hook
 
 The audio beat and energy entities make cross-system automations straightforward:
