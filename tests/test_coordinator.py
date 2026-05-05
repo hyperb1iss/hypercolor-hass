@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
-from custom_components.hypercolor.coordinator import load_catalog, load_state
+from custom_components.hypercolor.coordinator import _handle_ws_message, load_catalog, load_state
 
 
 async def test_load_state_flattens_status_and_active_resources() -> None:
@@ -17,14 +18,18 @@ async def test_load_state_flattens_status_and_active_resources() -> None:
                 audio_available=True,
             )
         ),
-        get_active_effect=_async_value(SimpleNamespace(id="aurora", active_preset_id="soft")),
+        get_active_effect=_async_value(
+            SimpleNamespace(id="aurora", name="Aurora", active_preset_id="soft")
+        ),
         get_active_scene=_async_value(SimpleNamespace(id="scene-1")),
         get_active_layout=_async_value(SimpleNamespace(id="layout-1")),
     )
 
     state = await load_state(client)
 
-    assert state["active_effect"] == "aurora"
+    assert state["active_effect"] == "Aurora"
+    assert state["active_effect_id"] == "aurora"
+    assert state["active_preset"] == "soft"
     assert state["global_brightness"] == 66
     assert state["active_scene"] == "scene-1"
     assert state["active_layout"] == "layout-1"
@@ -50,8 +55,55 @@ async def test_load_catalog_gathers_home_assistant_picker_lists() -> None:
     }
 
 
+def test_ws_events_schedule_refresh_without_overwriting_state() -> None:
+    state = _FakeCoordinator({"active_effect": "Aurora"})
+    runtime: Any = SimpleNamespace(
+        connection_state=SimpleNamespace(set_connected=lambda: None),
+        coordinators={
+            "state": state,
+            "catalog": _FakeCoordinator({}),
+            "devices": _FakeCoordinator([]),
+        },
+    )
+
+    _handle_ws_message(
+        runtime,
+        EventMessage("effect_degraded", {"state": "failed"}),
+        {},
+    )
+
+    assert state.data == {"active_effect": "Aurora"}
+    assert state.hass.scheduled == 1
+    assert runtime.coordinators["catalog"].hass.scheduled == 1
+    assert runtime.coordinators["devices"].hass.scheduled == 1
+
+
 def _async_value(value: object):
     async def _loader() -> object:
         return value
 
     return _loader
+
+
+class EventMessage:
+    def __init__(self, event: str, data: object) -> None:
+        self.event = event
+        self.data = data
+
+
+class _FakeHass:
+    def __init__(self) -> None:
+        self.scheduled = 0
+
+    def async_create_task(self, coro: Any) -> None:
+        self.scheduled += 1
+        coro.close()
+
+
+class _FakeCoordinator:
+    def __init__(self, data: object) -> None:
+        self.data = data
+        self.hass = _FakeHass()
+
+    async def async_request_refresh(self) -> None:
+        return None

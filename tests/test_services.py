@@ -45,7 +45,7 @@ async def test_set_color_applies_solid_color_effect() -> None:
     assert client.calls == [
         (
             "apply_effect",
-            ("hypercolor:builtin:solid_color",),
+            ("solid_color",),
             {"controls": {"color": "#80ff00"}},
         )
     ]
@@ -124,7 +124,11 @@ def _call(client: _FakeClient, data: dict[str, Any]) -> Any:
         title="Hyperia",
         runtime_data=SimpleNamespace(
             client=client,
-            coordinators={"state": SimpleNamespace(data={"active_effect": "aurora"})},
+            coordinators={
+                "state": SimpleNamespace(
+                    data={"active_effect": "Aurora", "active_effect_id": "aurora"}
+                )
+            },
         ),
     )
     hass = SimpleNamespace(

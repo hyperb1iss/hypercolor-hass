@@ -12,6 +12,9 @@ from .const import CONF_CHANNELS_AUDIO, CONF_PER_DEVICE_ENTITIES, OPTIONS_DEFAUL
 from .entity import child_device_info, hub_device_info, read_field
 from .runtime_data import HypercolorRuntimeData
 
+_AUDIO_DEVICE_DEFAULT = "default"
+_AUDIO_DEVICE_NONE = "none"
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -36,25 +39,29 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class HypercolorAudioReactiveSwitch(SwitchEntity):
+class HypercolorAudioReactiveSwitch(CoordinatorEntity, SwitchEntity):
     _attr_has_entity_name = True
     _attr_name = "Audio reactive"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
         runtime = entry.runtime_data
+        super().__init__(runtime.coordinators["audio"])
         self._entry = entry
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:audio_reactive"
 
     @property
-    def is_on(self) -> bool:
-        return bool(self._entry.options.get(CONF_CHANNELS_AUDIO, False))
+    def is_on(self) -> bool | None:
+        current = read_field(read_field(self.coordinator.data, "devices"), "current")
+        return audio_device_enabled(current)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self._entry.runtime_data.client.set_audio_device("default")
+        await self._entry.runtime_data.client.set_audio_device(_AUDIO_DEVICE_DEFAULT)
+        await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._entry.runtime_data.client.set_audio_device("disabled")
+        await self._entry.runtime_data.client.set_audio_device(_AUDIO_DEVICE_NONE)
+        await self.coordinator.async_request_refresh()
 
 
 class HypercolorDeviceEnabledSwitch(CoordinatorEntity, SwitchEntity):
@@ -89,3 +96,9 @@ class HypercolorDeviceEnabledSwitch(CoordinatorEntity, SwitchEntity):
             if str(read_field(device, "id")) == self._device_id:
                 return device
         return None
+
+
+def audio_device_enabled(device_id: Any) -> bool | None:
+    if device_id is None:
+        return None
+    return str(device_id).lower() not in {"", _AUDIO_DEVICE_NONE}

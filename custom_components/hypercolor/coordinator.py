@@ -85,12 +85,17 @@ async def load_state(client: Any) -> dict[str, Any]:
     active_effect = await _optional(client.get_active_effect)
     active_scene = await _optional(client.get_active_scene)
     active_layout = await _optional(client.get_active_layout)
+    active_effect_id = read_field(active_effect, "id", read_field(status, "active_effect"))
+    active_effect_name = read_field(active_effect, "name", read_field(status, "active_effect"))
     return {
         "status": status,
         "active_effect_detail": active_effect,
         "active_scene_detail": active_scene,
         "active_layout_detail": active_layout,
-        "active_effect": read_field(active_effect, "id", read_field(status, "active_effect")),
+        "active_effect": active_effect_name,
+        "active_effect_id": active_effect_id,
+        "active_effect_name": active_effect_name,
+        "active_preset": read_field(active_effect, "active_preset_id"),
         "active_scene": read_field(active_scene, "id"),
         "active_layout": read_field(active_layout, "id"),
         "global_brightness": read_field(status, "global_brightness"),
@@ -210,14 +215,9 @@ def _handle_ws_message(
         }
         _set_coordinator_data(runtime, "audio", current)
     elif message_name == "EventMessage":
-        event_data = read_field(message, "data", {})
         event = str(read_field(message, "event", ""))
         if event.startswith(("effect", "scene", "profile", "layout", "device")):
-            for key in ("state", "catalog", "devices"):
-                if coordinator := runtime.coordinators.get(key):
-                    coordinator.async_update_listeners()
-        if isinstance(event_data, dict) and "state" in event_data:
-            _set_coordinator_data(runtime, "state", event_data["state"])
+            _request_refresh(runtime, "state", "catalog", "devices")
 
 
 def _set_coordinator_data(
@@ -227,3 +227,9 @@ def _set_coordinator_data(
 ) -> None:
     if coordinator := runtime.coordinators.get(coordinator_name):
         coordinator.async_set_updated_data(data)
+
+
+def _request_refresh(runtime: HypercolorRuntimeData, *coordinator_names: str) -> None:
+    for coordinator_name in coordinator_names:
+        if coordinator := runtime.coordinators.get(coordinator_name):
+            coordinator.hass.async_create_task(coordinator.async_request_refresh())

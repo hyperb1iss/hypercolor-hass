@@ -241,7 +241,7 @@ async def _set_color(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
     color = _color_value(call.data)
     await entry.runtime_data.client.apply_effect(
-        "hypercolor:builtin:solid_color",
+        "solid_color",
         controls={"color": color},
     )
 
@@ -297,9 +297,8 @@ async def _apply_preset(call: ServiceCall) -> None:
 
 async def _save_preset(call: ServiceCall) -> dict[str, Any]:
     entry = _entry(call.hass, call)
-    effect_id = call.data.get("effect_id") or entry.runtime_data.coordinators["state"].data.get(
-        "active_effect"
-    )
+    state = entry.runtime_data.coordinators["state"].data
+    effect_id = call.data.get("effect_id") or state.get("active_effect_id")
     if not effect_id:
         raise HomeAssistantError("effect_id is required when no effect is active")
     preset = await entry.runtime_data.client.save_preset(

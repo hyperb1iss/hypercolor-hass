@@ -101,7 +101,7 @@ class HypercolorEffectNavigationButton(CoordinatorEntity, ButtonEntity):
         if self._step == 0:
             effect = secrets.choice(effects)
         else:
-            active = read_field(self._state.data, "active_effect")
+            active = read_field(self._state.data, "active_effect_id")
             index = next(
                 (idx for idx, effect in enumerate(effects) if item_id(effect) == active),
                 -1,

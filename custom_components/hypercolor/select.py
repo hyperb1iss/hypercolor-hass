@@ -87,7 +87,7 @@ class HypercolorCatalogSelect(CoordinatorEntity, SelectEntity):
         items = self._items
         if self._key != "presets":
             return [item_name(item) for item in items]
-        active_effect = read_field(self._state.data, "active_effect")
+        active_effect = read_field(self._state.data, "active_effect_id")
         return [
             item_name(item)
             for item in items

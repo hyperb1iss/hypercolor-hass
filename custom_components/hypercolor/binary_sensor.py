@@ -14,7 +14,7 @@ from .const import (
     CONF_CHANNELS_AUDIO,
     DEFAULT_AUDIO_BEAT_HOLD_MS,
 )
-from .entity import hub_device_info
+from .entity import catalog_items, hub_device_info, item_id, item_name, read_field
 from .runtime_data import HypercolorRuntimeData
 
 
@@ -109,10 +109,24 @@ class HypercolorAudioReactiveBinarySensor(CoordinatorEntity, BinarySensorEntity)
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
         runtime = entry.runtime_data
         super().__init__(runtime.coordinators["state"])
+        self._catalog = runtime.coordinators["catalog"]
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:audio_reactive_active"
 
     @property
     def is_on(self) -> bool:
-        active = (self.coordinator.data or {}).get("active_effect_detail")
-        return bool(getattr(active, "audio_reactive", False))
+        return active_effect_audio_reactive(self.coordinator.data, self._catalog.data)
+
+
+def active_effect_audio_reactive(state_data: object, catalog_data: object) -> bool:
+    active = read_field(state_data, "active_effect_detail")
+    audio_reactive = read_field(active, "audio_reactive")
+    if audio_reactive is not None:
+        return bool(audio_reactive)
+
+    active_id = read_field(state_data, "active_effect_id")
+    active_name = read_field(state_data, "active_effect")
+    for effect in catalog_items(catalog_data, "effects"):
+        if item_id(effect) == active_id or item_name(effect) == active_name:
+            return bool(read_field(effect, "audio_reactive", False))
+    return False
