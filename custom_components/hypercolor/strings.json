@@ -64,5 +64,15 @@
         "name": "Active effect"
       }
     }
+  },
+  "issues": {
+    "auth_invalid": {
+      "title": "Hypercolor API key was rejected",
+      "description": "Re-authenticate the Hypercolor integration with a key that can read and control the daemon."
+    },
+    "daemon_unavailable": {
+      "title": "Hypercolor daemon is unavailable",
+      "description": "Home Assistant could not refresh Hypercolor. Check that the daemon is running and reachable."
+    }
   }
 }

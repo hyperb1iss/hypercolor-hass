@@ -10,9 +10,46 @@ apply_effect:
         config_entry:
           integration: hypercolor
     effect_id:
-      required: true
       selector:
         text:
+    preset_id:
+      selector:
+        text:
+    controls:
+      selector:
+        object:
+    transition:
+      selector:
+        object:
+
+set_color:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    hex:
+      selector:
+        text:
+    r:
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    g:
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    b:
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
 
 set_control:
   fields:
@@ -42,6 +79,27 @@ activate_scene:
       selector:
         text:
 
+create_scene:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    name:
+      required: true
+      selector:
+        text:
+    description:
+      selector:
+        text:
+    enabled:
+      selector:
+        boolean:
+    mutation_mode:
+      selector:
+        text:
+
 activate_profile:
   fields:
     config_entry_id:
@@ -54,6 +112,30 @@ activate_profile:
       selector:
         text:
 
+save_profile:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    name:
+      required: true
+      selector:
+        text:
+    description:
+      selector:
+        text:
+    brightness:
+      selector:
+        number:
+          min: 0
+          max: 100
+          mode: slider
+    force:
+      selector:
+        boolean:
+
 apply_layout:
   fields:
     config_entry_id:
@@ -63,6 +145,65 @@ apply_layout:
           integration: hypercolor
     layout_id:
       required: true
+      selector:
+        text:
+
+apply_preset:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    preset_id:
+      required: true
+      selector:
+        text:
+
+save_preset:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    name:
+      required: true
+      selector:
+        text:
+    effect_id:
+      selector:
+        text:
+    description:
+      selector:
+        text:
+    controls:
+      selector:
+        object:
+    tags:
+      selector:
+        object:
+
+delete_preset:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    preset_id:
+      required: true
+      selector:
+        text:
+
+list_presets:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    effect_id:
       selector:
         text:
 
@@ -85,6 +226,53 @@ identify_device:
           step: 100
           mode: box
 
+set_display_face:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    display_id:
+      required: true
+      selector:
+        text:
+    effect_id:
+      required: true
+      selector:
+        text:
+    controls:
+      selector:
+        object:
+    blend_mode:
+      selector:
+        text:
+    opacity:
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.05
+          mode: slider
+
+upload_effect:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    path:
+      selector:
+        text:
+    html:
+      selector:
+        text:
+          multiline: true
+    file_name:
+      selector:
+        text:
+
 run_diagnostics:
   fields:
     config_entry_id:
@@ -92,3 +280,6 @@ run_diagnostics:
       selector:
         config_entry:
           integration: hypercolor
+    checks:
+      selector:
+        object:

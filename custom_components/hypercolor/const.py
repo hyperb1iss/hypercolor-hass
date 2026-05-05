@@ -27,7 +27,13 @@ PLATFORMS = [
     Platform.LIGHT,
     Platform.BINARY_SENSOR,
     Platform.SENSOR,
+    Platform.SELECT,
+    Platform.BUTTON,
+    Platform.SWITCH,
+    Platform.NUMBER,
 ]
+
+LIVE_CONTROL_IDS = ("brightness", "speed", "hue_shift", "intensity")
 
 OPTIONS_DEFAULTS = {
     CONF_RECONCILE_INTERVAL_S: DEFAULT_RECONCILE_INTERVAL_S,

@@ -40,5 +40,6 @@ class HypercolorRuntimeData:
     server: ServerInfo
     coordinators: dict[str, Any] = field(default_factory=dict)
     connection_state: ConnectionState = field(default_factory=ConnectionState)
+    per_device_entity_ids: set[str] = field(default_factory=set)
     ws_task: asyncio.Task[None] | None = None
     reconcile_task: asyncio.Task[None] | None = None

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -10,10 +11,23 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from hypercolor import HypercolorAuthenticationError
+from hypercolor import HypercolorAuthenticationError, HypercolorNotFoundError
 
-from .const import DOMAIN
-from .runtime_data import ConnectionState
+from .const import (
+    CONF_AUDIO_BEAT_HOLD_MS,
+    CONF_CHANNELS_AUDIO,
+    CONF_CHANNELS_DEVICE_METRICS,
+    CONF_CHANNELS_METRICS,
+    DOMAIN,
+    OPTIONS_DEFAULTS,
+)
+from .entity import read_field
+from .repairs import (
+    async_create_auth_issue,
+    async_create_unavailable_issue,
+    async_delete_runtime_issues,
+)
+from .runtime_data import ConnectionState, HypercolorRuntimeData
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -37,17 +51,21 @@ class HypercolorCoordinator(DataUpdateCoordinator[Any]):
         )
         self._loader = loader
         self._connection_state = connection_state
+        self._config_entry = config_entry
 
     async def _async_update_data(self) -> Any:
         try:
             data = await self._loader()
         except HypercolorAuthenticationError as exc:
             self._connection_state.set_disconnected(exc)
+            async_create_auth_issue(self.hass, self._config_entry.entry_id)
             raise ConfigEntryAuthFailed from exc
         except Exception as exc:
             self._connection_state.set_disconnected(exc)
+            async_create_unavailable_issue(self.hass, self._config_entry.entry_id)
             raise
         self._connection_state.set_connected()
+        async_delete_runtime_issues(self.hass, self._config_entry.entry_id)
         return data
 
 
@@ -60,3 +78,152 @@ async def reconcile_loop(
         await asyncio.gather(
             *(coordinator.async_request_refresh() for coordinator in coordinators)
         )
+
+
+async def load_state(client: Any) -> dict[str, Any]:
+    status = await client.get_status()
+    active_effect = await _optional(client.get_active_effect)
+    active_scene = await _optional(client.get_active_scene)
+    active_layout = await _optional(client.get_active_layout)
+    return {
+        "status": status,
+        "active_effect_detail": active_effect,
+        "active_scene_detail": active_scene,
+        "active_layout_detail": active_layout,
+        "active_effect": read_field(active_effect, "id", read_field(status, "active_effect")),
+        "active_scene": read_field(active_scene, "id"),
+        "active_layout": read_field(active_layout, "id"),
+        "global_brightness": read_field(status, "global_brightness"),
+        "brightness": read_field(status, "brightness"),
+        "device_count": read_field(status, "device_count"),
+        "scene_count": read_field(status, "scene_count"),
+        "render_loop": read_field(status, "render_loop", {}),
+        "audio_available": read_field(status, "audio_available", False),
+    }
+
+
+async def load_catalog(client: Any) -> dict[str, Any]:
+    return {
+        "effects": await client.get_effects(),
+        "scenes": await client.get_scenes(),
+        "profiles": await client.get_profiles(),
+        "layouts": await client.get_layouts(),
+        "presets": await client.get_presets(),
+    }
+
+
+async def load_metrics(client: Any) -> dict[str, Any]:
+    status = await client.get_status()
+    return {
+        "status": status,
+        "render_loop": read_field(status, "render_loop", {}),
+    }
+
+
+async def load_audio(client: Any) -> dict[str, Any]:
+    devices = await client.get_audio_devices()
+    return {"devices": devices, "spectrum": None, "enabled": True}
+
+
+async def websocket_loop(runtime: HypercolorRuntimeData, options: dict[str, Any]) -> None:
+    backoff_s = 1
+    while True:
+        stream = runtime.client.events()
+        try:
+            hello = await stream.connect()
+            runtime.connection_state.set_connected()
+            _seed_hello(runtime, hello)
+            channels = _websocket_channels(options)
+            if channels:
+                await stream.subscribe(*channels)
+            backoff_s = 1
+            async for message in stream:
+                _handle_ws_message(runtime, message, options)
+        except asyncio.CancelledError:
+            await stream.disconnect()
+            raise
+        except Exception as exc:  # noqa: BLE001
+            runtime.connection_state.set_disconnected(exc)
+            _LOGGER.debug("Hypercolor WebSocket disconnected", exc_info=True)
+            await stream.disconnect()
+            await asyncio.sleep(backoff_s)
+            backoff_s = min(backoff_s * 2, 30)
+
+
+async def _optional(loader: Callable[[], Awaitable[Any]]) -> Any:
+    try:
+        return await loader()
+    except HypercolorNotFoundError:
+        return None
+
+
+def _seed_hello(runtime: HypercolorRuntimeData, hello: Any) -> None:
+    state = read_field(hello, "state")
+    if isinstance(state, dict) and (coordinator := runtime.coordinators.get("state")):
+        merged = dict(coordinator.data or {})
+        merged.update(state)
+        coordinator.async_set_updated_data(merged)
+
+
+def _websocket_channels(options: dict[str, Any]) -> list[str]:
+    channels = ["events"]
+    if options.get(CONF_CHANNELS_METRICS, OPTIONS_DEFAULTS[CONF_CHANNELS_METRICS]):
+        channels.append("metrics")
+    if options.get(
+        CONF_CHANNELS_DEVICE_METRICS,
+        OPTIONS_DEFAULTS[CONF_CHANNELS_DEVICE_METRICS],
+    ):
+        channels.append("device_metrics")
+    if options.get(CONF_CHANNELS_AUDIO, OPTIONS_DEFAULTS[CONF_CHANNELS_AUDIO]):
+        channels.append("spectrum")
+    return channels
+
+
+def _handle_ws_message(
+    runtime: HypercolorRuntimeData,
+    message: Any,
+    options: dict[str, Any],
+) -> None:
+    runtime.connection_state.set_connected()
+    message_name = type(message).__name__
+    if message_name == "MetricsMessage":
+        _set_coordinator_data(runtime, "metrics", read_field(message, "data", {}))
+    elif message_name == "SpectrumData":
+        hold_ms = int(
+            options.get(
+                CONF_AUDIO_BEAT_HOLD_MS,
+                OPTIONS_DEFAULTS[CONF_AUDIO_BEAT_HOLD_MS],
+            )
+        )
+        beat_until = None
+        if read_field(message, "beat", False):
+            beat_until = datetime.now(UTC) + timedelta(milliseconds=hold_ms)
+        current = dict(read_field(runtime.coordinators.get("audio"), "data", {}) or {})
+        current["spectrum"] = {
+            "level": read_field(message, "level", 0.0),
+            "bass": read_field(message, "bass", 0.0),
+            "mid": read_field(message, "mid", 0.0),
+            "treble": read_field(message, "treble", 0.0),
+            "beat": read_field(message, "beat", False),
+            "beat_confidence": read_field(message, "beat_confidence", 0.0),
+            "beat_until": beat_until,
+        }
+        _set_coordinator_data(runtime, "audio", current)
+    elif message_name == "EventMessage":
+        event_data = read_field(message, "data", {})
+        event = str(read_field(message, "event", ""))
+        if event.startswith(("effect", "scene", "profile", "layout", "device")):
+            for key in ("state", "catalog", "devices"):
+                if coordinator := runtime.coordinators.get(key):
+                    coordinator.async_update_listeners()
+        if isinstance(event_data, dict) and "state" in event_data:
+            _set_coordinator_data(runtime, "state", event_data["state"])
+
+
+def _set_coordinator_data(
+    runtime: HypercolorRuntimeData,
+    coordinator_name: str,
+    data: Any,
+) -> None:
+    if coordinator := runtime.coordinators.get(coordinator_name):
+        coordinator.async_set_updated_data(data)

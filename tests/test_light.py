@@ -9,6 +9,12 @@ def test_effect_names_prefer_display_name() -> None:
     assert effect_names(catalog) == ["Neon Rain"]
 
 
+def test_effect_names_accept_catalog_payload() -> None:
+    catalog = {"effects": [{"id": "neon_rain", "name": "Neon Rain"}]}
+
+    assert effect_names(catalog) == ["Neon Rain"]
+
+
 def test_effect_id_for_name_maps_home_assistant_choice_to_daemon_id() -> None:
     catalog = [{"id": "neon_rain", "name": "Neon Rain"}]
 
