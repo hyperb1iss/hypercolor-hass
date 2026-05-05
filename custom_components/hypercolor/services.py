@@ -26,26 +26,43 @@ SERVICE_RUN_DIAGNOSTICS = "run_diagnostics"
 
 
 def async_setup_services(hass: HomeAssistant) -> None:
-    _register(hass, SERVICE_APPLY_EFFECT, _apply_effect, _schema({"effect_id": cv.string}))
+    _register(
+        hass,
+        SERVICE_APPLY_EFFECT,
+        _apply_effect,
+        _schema({vol.Required("effect_id"): cv.string}),
+    )
     _register(
         hass,
         SERVICE_SET_CONTROL,
         _set_control,
-        _schema({"control_name": cv.string, "value": object}),
+        _schema({vol.Required("control_name"): cv.string, vol.Required("value"): object}),
     )
-    _register(hass, SERVICE_ACTIVATE_SCENE, _activate_scene, _schema({"scene_id": cv.string}))
+    _register(
+        hass,
+        SERVICE_ACTIVATE_SCENE,
+        _activate_scene,
+        _schema({vol.Required("scene_id"): cv.string}),
+    )
     _register(
         hass,
         SERVICE_ACTIVATE_PROFILE,
         _activate_profile,
-        _schema({"profile_id": cv.string}),
+        _schema({vol.Required("profile_id"): cv.string}),
     )
-    _register(hass, SERVICE_APPLY_LAYOUT, _apply_layout, _schema({"layout_id": cv.string}))
+    _register(
+        hass,
+        SERVICE_APPLY_LAYOUT,
+        _apply_layout,
+        _schema({vol.Required("layout_id"): cv.string}),
+    )
     _register(
         hass,
         SERVICE_IDENTIFY_DEVICE,
         _identify_device,
-        _schema({"device_id": cv.string, vol.Optional("duration_ms"): cv.positive_int}),
+        _schema(
+            {vol.Required("device_id"): cv.string, vol.Optional("duration_ms"): cv.positive_int}
+        ),
     )
     _register(
         hass,

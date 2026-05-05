@@ -52,12 +52,23 @@ async def async_validate_daemon(
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         try:
             auth_probe = await httpx_client.get(f"{root_url}/api/v1/effects", headers=headers)
+            control_probe = await httpx_client.patch(
+                f"{root_url}/api/v1/effects/current/controls",
+                headers=headers,
+                json={"controls": {}},
+            )
         except httpx.HTTPError as exc:
             raise CannotConnectError from exc
 
-        if auth_probe.status_code == httpx.codes.UNAUTHORIZED:
+        if auth_probe.status_code == httpx.codes.UNAUTHORIZED or control_probe.status_code in {
+            httpx.codes.UNAUTHORIZED,
+            httpx.codes.FORBIDDEN,
+        }:
             raise InvalidAuthError
-        if auth_probe.status_code >= httpx.codes.BAD_REQUEST:
+        if (
+            auth_probe.status_code >= httpx.codes.BAD_REQUEST
+            or control_probe.status_code >= httpx.codes.INTERNAL_SERVER_ERROR
+        ):
             raise CannotConnectError
 
     return server_info

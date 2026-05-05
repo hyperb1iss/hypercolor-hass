@@ -5,6 +5,7 @@ import pytest
 
 from custom_components.hypercolor.api import (
     CannotConnectError,
+    InvalidAuthError,
     _normalize_server_info,
     async_validate_daemon,
 )
@@ -56,4 +57,34 @@ async def test_validate_daemon_rejects_malformed_payload() -> None:
                 host="127.0.0.1",
                 port=9420,
                 api_key=None,
+            )
+
+
+async def test_validate_daemon_rejects_read_only_api_key() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/server":
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "identity": {
+                            "instance_id": "srv_1",
+                            "instance_name": "Hyperia",
+                            "version": "0.1.0",
+                        },
+                        "auth_required": True,
+                    }
+                },
+            )
+        if request.url.path == "/api/v1/effects":
+            return httpx.Response(200, json={"data": []})
+        return httpx.Response(403, json={"error": {"code": "forbidden"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(InvalidAuthError):
+            await async_validate_daemon(
+                client,
+                host="127.0.0.1",
+                port=9420,
+                api_key="hc_ak_r_read_only",
             )
