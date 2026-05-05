@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
@@ -138,6 +139,7 @@ async def websocket_loop(runtime: HypercolorRuntimeData, options: dict[str, Any]
             hello = await stream.connect()
             runtime.connection_state.set_connected()
             _seed_hello(runtime, hello)
+            await _reconcile_after_reconnect(runtime)
             channels = _websocket_channels(options)
             if channels:
                 await stream.subscribe(*channels)
@@ -145,14 +147,15 @@ async def websocket_loop(runtime: HypercolorRuntimeData, options: dict[str, Any]
             async for message in stream:
                 _handle_ws_message(runtime, message, options)
         except asyncio.CancelledError:
-            await stream.disconnect()
             raise
         except Exception as exc:  # noqa: BLE001
             runtime.connection_state.set_disconnected(exc)
             _LOGGER.debug("Hypercolor WebSocket disconnected", exc_info=True)
-            await stream.disconnect()
             await asyncio.sleep(backoff_s)
             backoff_s = min(backoff_s * 2, 30)
+        finally:
+            with contextlib.suppress(Exception):
+                await stream.disconnect()
 
 
 async def _optional(loader: Callable[[], Awaitable[Any]]) -> Any:
@@ -168,6 +171,16 @@ def _seed_hello(runtime: HypercolorRuntimeData, hello: Any) -> None:
         merged = dict(coordinator.data or {})
         merged.update(state)
         coordinator.async_set_updated_data(merged)
+
+
+async def _reconcile_after_reconnect(runtime: HypercolorRuntimeData) -> None:
+    refreshes = [
+        runtime.coordinators[name].async_request_refresh()
+        for name in ("state", "catalog", "devices")
+        if name in runtime.coordinators
+    ]
+    if refreshes:
+        await asyncio.gather(*refreshes, return_exceptions=True)
 
 
 def _websocket_channels(options: dict[str, Any]) -> list[str]:

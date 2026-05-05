@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Hypercolor daemon
+    url: https://github.com/hyperb1iss/hypercolor/issues
+    about: Effect engine, drivers, spatial topology, audio pipeline. Anything below the HA bridge.
+  - name: Discussions
+    url: https://github.com/hyperb1iss/hypercolor-hass/discussions
+    about: Questions, recipes, dashboard ideas, automations.

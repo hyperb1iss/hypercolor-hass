@@ -1,0 +1,60 @@
+name: Bug report
+description: Something is broken in the Home Assistant integration
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing! The most useful payload for diagnosing problems is
+        `hypercolor.run_diagnostics` — it returns daemon health and coordinator state
+        with hosts and keys redacted.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: A clear description of the bug. Include logs from the HA `custom_components.hypercolor` logger if you have them.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Add the integration with...
+        2. Toggle...
+        3. See...
+    validations:
+      required: true
+
+  - type: input
+    id: ha-version
+    attributes:
+      label: Home Assistant version
+      placeholder: 2026.4.4
+    validations:
+      required: true
+
+  - type: input
+    id: integration-version
+    attributes:
+      label: Hypercolor integration version
+      placeholder: 0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: daemon-version
+    attributes:
+      label: Hypercolor daemon version
+      placeholder: 0.1.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics output
+      description: Paste the result of `hypercolor.run_diagnostics` if you have it.
+      render: yaml

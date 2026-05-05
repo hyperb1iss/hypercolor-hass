@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest something new for the Home Assistant integration
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Lighting features (new effects, new drivers, spatial topology) belong upstream in
+        [hypercolor](https://github.com/hyperb1iss/hypercolor). This repo handles the
+        bridge to Home Assistant: entities, services, config flow, options, repairs.
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: What are you trying to do
+      description: The automation, dashboard, or workflow you're shaping. Concrete > abstract.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like to see
+      description: A new entity, service, option, or behavior. Sketch the API if you have one in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've tried
