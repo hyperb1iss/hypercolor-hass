@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check out Hypercolor client
+        run: git clone --depth 1 https://github.com/hyperb1iss/hypercolor ../hypercolor
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install 3.14
+      - name: Sync
+        run: uv sync --all-groups --locked
+      - name: Lint
+        run: uv run ruff check . && uv run ruff format --check .
+      - name: Typecheck
+        run: uv run ty check
+      - name: Test
+        run: uv run pytest
+      - name: Metadata
+        run: uv run python scripts/check_integration_metadata.py
+      - name: Build
+        run: uv build

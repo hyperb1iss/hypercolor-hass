@@ -1,0 +1,9 @@
+alias: Sunset warm Hypercolor
+trigger:
+  - platform: sun
+    event: sunset
+action:
+  - service: hypercolor.apply_effect
+    data:
+      config_entry_id: YOUR_CONFIG_ENTRY_ID
+      effect_id: warm_sunset

@@ -1,0 +1,16 @@
+alias: Bass dim main lights
+trigger:
+  - platform: state
+    entity_id: binary_sensor.hypercolor_audio_beat
+    to: "on"
+condition:
+  - condition: numeric_state
+    entity_id: sensor.hypercolor_audio_energy
+    above: 0.7
+action:
+  - service: light.turn_on
+    target:
+      entity_id: light.living_room_main
+    data:
+      brightness_step_pct: -20
+      transition: 0.1

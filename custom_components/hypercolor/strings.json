@@ -1,0 +1,68 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Hypercolor",
+        "description": "Connect to a Hypercolor daemon.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "api_key": "API key"
+        }
+      },
+      "zeroconf_confirm": {
+        "title": "Add {name}",
+        "description": "Connect to the Hypercolor daemon at {host}.",
+        "data": {
+          "api_key": "API key"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate {name}",
+        "description": "Enter a new API key for the Hypercolor daemon at {host}.",
+        "data": {
+          "api_key": "API key"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to the Hypercolor daemon.",
+      "invalid_auth": "The API key was rejected."
+    },
+    "abort": {
+      "already_configured": "This Hypercolor daemon is already configured.",
+      "missing_discovery": "Discovery data was incomplete.",
+      "missing_instance_id": "The discovered daemon did not include an instance ID."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Hypercolor options",
+        "data": {
+          "reconcile_interval_s": "Reconcile interval",
+          "channels.audio": "Audio entities",
+          "channels.metrics": "Metrics entities",
+          "channels.device_metrics": "Device metrics",
+          "live_controls_enabled": "Live control number entities",
+          "audio_beat_hold_ms": "Audio beat hold",
+          "disconnect_grace_s": "Disconnect grace",
+          "unavailable_after_s": "Unavailable after",
+          "per_device_entities": "Per-device entities"
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "connected": {
+        "name": "Connected"
+      }
+    },
+    "sensor": {
+      "active_effect": {
+        "name": "Active effect"
+      }
+    }
+  }
+}

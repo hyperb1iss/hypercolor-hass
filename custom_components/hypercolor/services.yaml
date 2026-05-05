@@ -1,0 +1,94 @@
+apply_effect:
+  target:
+    entity:
+      integration: hypercolor
+      domain: light
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    effect_id:
+      required: true
+      selector:
+        text:
+
+set_control:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    control_name:
+      required: true
+      selector:
+        text:
+    value:
+      required: true
+      selector:
+        object:
+
+activate_scene:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    scene_id:
+      required: true
+      selector:
+        text:
+
+activate_profile:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    profile_id:
+      required: true
+      selector:
+        text:
+
+apply_layout:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    layout_id:
+      required: true
+      selector:
+        text:
+
+identify_device:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    device_id:
+      required: true
+      selector:
+        text:
+    duration_ms:
+      selector:
+        number:
+          min: 100
+          max: 10000
+          step: 100
+          mode: box
+
+run_diagnostics:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor

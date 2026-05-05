@@ -1,0 +1,157 @@
+[build-system]
+requires = ["uv_build>=0.11.9,<0.12"]
+build-backend = "uv_build"
+
+[project]
+name = "hypercolor-hass"
+version = "0.1.0"
+description = "Home Assistant integration for Hypercolor RGB lighting orchestration"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.14.2,<3.15"
+authors = [{ name = "Stefanie Jane", email = "stef@hyperbliss.tech" }]
+keywords = ["home-assistant", "hypercolor", "rgb", "lighting", "hacs"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Framework :: Home Assistant",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+    "Private :: Do Not Upload",
+]
+dependencies = [
+    "hypercolor>=0.1.0,<0.2.0",
+]
+
+[dependency-groups]
+dev = [
+    { include-group = "hass" },
+    { include-group = "lint" },
+    { include-group = "test" },
+    { include-group = "types" },
+]
+hass = [
+    "homeassistant==2026.4.4",
+    "pytest-homeassistant-custom-component==0.13.325",
+]
+lint = [
+    "pre-commit>=4.5.0",
+    "ruff>=0.15.12",
+]
+test = [
+    "pytest==9.0.0",
+    "pytest-asyncio>=1.3.0",
+    "pytest-cov==7.0.0",
+]
+types = [
+    "ty>=0.0.34",
+]
+
+[project.urls]
+Homepage = "https://github.com/hyperb1iss/hypercolor-hass"
+Repository = "https://github.com/hyperb1iss/hypercolor-hass"
+Issues = "https://github.com/hyperb1iss/hypercolor-hass/issues"
+
+[tool.uv]
+package = true
+default-groups = ["dev"]
+
+[tool.uv.sources]
+hypercolor = { path = "../hypercolor/python", editable = true }
+
+[tool.uv.build-backend]
+module-name = "custom_components.hypercolor"
+module-root = ""
+namespace = true
+source-include = ["tests/**", "examples/**", "hacs.json"]
+
+[tool.ruff]
+line-length = 99
+target-version = "py314"
+src = ["custom_components", "scripts", "tests"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = [
+    "ASYNC",
+    "B",
+    "BLE",
+    "C4",
+    "DTZ",
+    "E",
+    "ERA",
+    "F",
+    "G",
+    "I",
+    "N",
+    "PL",
+    "PT",
+    "RET",
+    "RSE",
+    "RUF",
+    "S",
+    "SIM",
+    "TRY",
+    "UP",
+    "W",
+]
+ignore = [
+    "COM812",
+    "E501",
+    "ISC001",
+    "PLR0913",
+    "PLR2004",
+    "TRY003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/**/*.py" = ["S603", "S606", "S607", "T201"]
+"tests/**/*.py" = ["PLR2004", "S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["custom_components.hypercolor"]
+combine-as-imports = true
+
+[tool.ty.environment]
+python-version = "3.14"
+root = ["."]
+
+[tool.ty.src]
+include = ["custom_components/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
+
+[tool.ty.terminal]
+output-format = "concise"
+
+[[tool.ty.overrides]]
+include = ["tests/**"]
+
+[tool.ty.overrides.rules]
+possibly-unresolved-reference = "warn"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-v",
+]
+filterwarnings = [
+    "error",
+]
+
+[tool.coverage.run]
+source = ["custom_components/hypercolor"]
+branch = true
+parallel = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80

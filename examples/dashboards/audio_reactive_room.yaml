@@ -1,0 +1,8 @@
+type: entities
+title: Hypercolor Audio
+entities:
+  - light.hypercolor
+  - binary_sensor.hypercolor_connected
+  - sensor.hypercolor_active_effect
+  - binary_sensor.hypercolor_audio_beat
+  - sensor.hypercolor_audio_energy
