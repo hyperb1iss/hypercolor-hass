@@ -52,6 +52,9 @@ This integration brings that engine into Home Assistant as a hub. Master light, 
 profiles, layouts, live controls, audio-reactive primitives, and full device topology
 become first-class entities you can wire into automations, scripts, and dashboards.
 
+The companion Lovelace card is [hyper-light-card](https://github.com/hyperb1iss/hyper-light-card),
+built directly on this integration's catalog, live controls, and effect cover art.
+
 ## 🌈 Features
 
 | | |
@@ -214,6 +217,9 @@ brief beats actually trigger automations instead of bouncing too fast for HA to 
 
 ### Live tweak from a dashboard
 
+[hyper-light-card](https://github.com/hyperb1iss/hyper-light-card) is the dedicated Lovelace
+card if you want a polished UI. For a stock entities card:
+
 ```yaml
 type: entities
 title: Hypercolor
@@ -307,7 +313,7 @@ code. Driver work, spatial topology, and effect authoring all live upstream in
 
 - 💜 [Hypercolor](https://github.com/hyperb1iss/hypercolor) — the engine and daemon
 - 🌌 [SignalRGB Home Assistant](https://github.com/hyperb1iss/signalrgb-homeassistant) — sister integration for SignalRGB on Windows
-- 🪄 [hyper-light-card](https://github.com/hyperb1iss/hyper-light-card) — Lovelace card built around effect catalogs
+- 🪄 [hyper-light-card](https://github.com/hyperb1iss/hyper-light-card) — companion Lovelace card for this integration
 
 ## 📄 License
 
