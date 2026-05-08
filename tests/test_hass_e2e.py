@@ -60,6 +60,14 @@ async def test_config_entry_boots_and_controls_fake_daemon(
     master = _first_state(hass, "light", lambda state: state.attributes.get("effect") == "Rainbow")
     assert master.state == "on"
     assert master.attributes["active_effect_id"] == "rainbow"
+    assert (
+        master.attributes["active_effect_cover_image_url"]
+        == f"http://127.0.0.1:{fake_daemon.port}/api/v1/effects/active/cover"
+    )
+    assert (
+        master.attributes["effect_image"]
+        == f"http://127.0.0.1:{fake_daemon.port}/api/v1/effects/active/cover"
+    )
     assert "Solid Color" in master.attributes["effect_list"]
 
     speed = _first_state(hass, "number", lambda state: "speed" in state.entity_id)
@@ -318,7 +326,7 @@ class _FakeHypercolorDaemon:
         ]
 
     def _active_effect(self) -> dict[str, Any]:
-        return {
+        effect = {
             "id": self.active_effect_id,
             "name": self._effect_name(self.active_effect_id),
             "state": "running",
@@ -347,6 +355,9 @@ class _FakeHypercolorDaemon:
             "control_values": self.control_values,
             "active_preset_id": "preset-rainbow",
         }
+        if self.active_effect_id:
+            effect["cover_image_url"] = f"/api/v1/effects/{self.active_effect_id}/cover"
+        return effect
 
     def _device(self) -> dict[str, Any]:
         return {

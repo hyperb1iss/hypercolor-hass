@@ -88,6 +88,7 @@ async def load_state(client: Any) -> dict[str, Any]:
     active_layout = await _optional(client.get_active_layout)
     active_effect_id = read_field(active_effect, "id", read_field(status, "active_effect"))
     active_effect_name = read_field(active_effect, "name", read_field(status, "active_effect"))
+    active_effect_cover_image_url = _active_effect_cover_image_url(client, active_effect)
     return {
         "status": status,
         "active_effect_detail": active_effect,
@@ -96,6 +97,7 @@ async def load_state(client: Any) -> dict[str, Any]:
         "active_effect": active_effect_name,
         "active_effect_id": active_effect_id,
         "active_effect_name": active_effect_name,
+        "active_effect_cover_image_url": active_effect_cover_image_url,
         "active_preset": read_field(active_effect, "active_preset_id"),
         "active_scene": read_field(active_scene, "id"),
         "active_layout": read_field(active_layout, "id"),
@@ -163,6 +165,33 @@ async def _optional(loader: Callable[[], Awaitable[Any]]) -> Any:
         return await loader()
     except HypercolorNotFoundError:
         return None
+
+
+def _active_effect_cover_image_url(client: Any, active_effect: Any) -> str | None:
+    cover_image_url = read_field(active_effect, "cover_image_url")
+    if not cover_image_url:
+        return None
+    if active_cover_url := _client_active_effect_cover_image_url(client):
+        return active_cover_url
+    return _daemon_url(client, str(cover_image_url))
+
+
+def _client_active_effect_cover_image_url(client: Any) -> str | None:
+    loader = getattr(client, "active_effect_cover_image_url", None)
+    if not callable(loader):
+        return None
+    value = loader()
+    return str(value) if value else None
+
+
+def _daemon_url(client: Any, path: str) -> str | None:
+    if path.startswith(("http://", "https://")):
+        return path
+    root_url = getattr(client, "root_url", None)
+    if not isinstance(root_url, str) or not root_url:
+        return None
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    return f"{root_url.rstrip('/')}{normalized_path}"
 
 
 def _seed_hello(runtime: HypercolorRuntimeData, hello: Any) -> None:

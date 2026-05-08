@@ -29,7 +29,7 @@
 </p>
 
 <p align="center">
-  <a href="#-the-pitch">Pitch</a> •
+  <a href="#-overview">Overview</a> •
   <a href="#-features">Features</a> •
   <a href="#-requirements">Requirements</a> •
   <a href="#-install">Install</a> •
@@ -42,7 +42,7 @@
 
 ---
 
-## 🔮 The Pitch
+## 🔮 Overview
 
 [Hypercolor](https://github.com/hyperb1iss/hypercolor) is an open-source RGB lighting engine.
 One daemon, every RGB device on your desk, all painted by the same effect at 60fps. Effects

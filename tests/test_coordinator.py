@@ -19,20 +19,52 @@ async def test_load_state_flattens_status_and_active_resources() -> None:
             )
         ),
         get_active_effect=_async_value(
-            SimpleNamespace(id="aurora", name="Aurora", active_preset_id="soft")
+            SimpleNamespace(
+                id="aurora",
+                name="Aurora",
+                active_preset_id="soft",
+                cover_image_url="/api/v1/effects/aurora/cover",
+            )
         ),
         get_active_scene=_async_value(SimpleNamespace(id="scene-1")),
         get_active_layout=_async_value(SimpleNamespace(id="layout-1")),
+        root_url="http://hyperia.test:9420",
+        active_effect_cover_image_url=lambda: (
+            "http://hyperia.test:9420/api/v1/effects/active/cover"
+        ),
     )
 
     state = await load_state(client)
 
     assert state["active_effect"] == "Aurora"
     assert state["active_effect_id"] == "aurora"
+    assert (
+        state["active_effect_cover_image_url"]
+        == "http://hyperia.test:9420/api/v1/effects/active/cover"
+    )
     assert state["active_preset"] == "soft"
     assert state["global_brightness"] == 66
     assert state["active_scene"] == "scene-1"
     assert state["active_layout"] == "layout-1"
+
+
+async def test_load_state_resolves_cover_image_without_client_helper() -> None:
+    client = SimpleNamespace(
+        get_status=_async_value(SimpleNamespace(active_effect="Aurora")),
+        get_active_effect=_async_value(
+            SimpleNamespace(id="aurora", name="Aurora", cover_image_url="effects/aurora/cover")
+        ),
+        get_active_scene=_async_value(None),
+        get_active_layout=_async_value(None),
+        root_url="http://hyperia.test:9420/api/v1",
+    )
+
+    state = await load_state(client)
+
+    assert (
+        state["active_effect_cover_image_url"]
+        == "http://hyperia.test:9420/api/v1/effects/aurora/cover"
+    )
 
 
 async def test_load_catalog_gathers_home_assistant_picker_lists() -> None:

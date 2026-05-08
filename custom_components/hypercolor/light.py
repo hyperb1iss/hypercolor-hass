@@ -79,10 +79,16 @@ class HypercolorMasterLight(CoordinatorEntity, LightEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        cover_image_url = read_field(
+            self.coordinator.data,
+            "active_effect_cover_image_url",
+        )
         return {
             "active_effect": self.effect,
             "active_effect_id": read_field(self.coordinator.data, "active_effect_id"),
+            "active_effect_cover_image_url": cover_image_url,
             "device_count": read_field(self.coordinator.data, "device_count"),
+            "effect_image": cover_image_url,
             "scene_count": read_field(self.coordinator.data, "scene_count"),
         }
 
