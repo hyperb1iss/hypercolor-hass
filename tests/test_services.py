@@ -13,9 +13,12 @@ from custom_components.hypercolor.services import (
     CONF_CONFIG_ENTRY_ID,
     _apply_effect,
     _list_presets,
+    _list_zones,
     _save_preset,
     _schema,
     _set_color,
+    _set_unassigned_behavior,
+    _set_zone,
     _upload_effect,
 )
 
@@ -33,7 +36,59 @@ async def test_apply_effect_can_route_to_preset() -> None:
 
     await _apply_effect(call)
 
-    assert client.calls == [("apply_preset", ("preset-1",), {})]
+    assert client.calls == [("apply_preset", ("preset-1",), {"render_group": None})]
+
+
+async def test_apply_effect_targets_zone() -> None:
+    client = _FakeClient()
+    call = _call(client, {"effect_id": "aurora", "zone_id": "zone-1"})
+
+    await _apply_effect(call)
+
+    assert client.calls == [
+        (
+            "apply_effect",
+            ("aurora",),
+            {"controls": None, "transition": None, "render_group": "zone-1"},
+        )
+    ]
+
+
+async def test_set_zone_scales_brightness_and_resolves_active_scene() -> None:
+    client = _FakeClient()
+    call = _call(client, {"zone_id": "zone-1", "brightness": 50, "enabled": True})
+
+    await _set_zone(call)
+
+    assert client.calls == [
+        ("get_active_scene", (), {}),
+        ("update_zone", ("scene-active", "zone-1"), {"brightness": 0.5, "enabled": True}),
+    ]
+
+
+async def test_set_unassigned_behavior_builds_fallback_payload() -> None:
+    client = _FakeClient()
+    call = _call(
+        client,
+        {"behavior": "fallback", "fallback_zone_id": "zone-2", "scene_id": "scene-9"},
+    )
+
+    await _set_unassigned_behavior(call)
+
+    assert client.calls == [("set_unassigned_behavior", ("scene-9", {"fallback": "zone-2"}), {})]
+
+
+async def test_list_zones_returns_jsonable_payload() -> None:
+    client = _FakeClient()
+    call = _call(client, {"scene_id": "scene-9"})
+
+    result = await _list_zones(call)
+
+    assert result == {
+        "scene_id": "scene-9",
+        "groups_revision": 4,
+        "zones": [{"id": "zone-1", "name": "Desk", "role": "primary"}],
+    }
 
 
 async def test_set_color_applies_solid_color_effect() -> None:
@@ -115,6 +170,22 @@ class _FakeClient:
     async def upload_effect(self, *args: Any, **kwargs: Any) -> dict[str, str]:
         self.calls.append(("upload_effect", args, kwargs))
         return {"id": "user:neon"}
+
+    async def get_active_scene(self) -> Any:
+        self.calls.append(("get_active_scene", (), {}))
+        return SimpleNamespace(id="scene-active")
+
+    async def update_zone(self, *args: Any, **kwargs: Any) -> None:
+        self.calls.append(("update_zone", args, kwargs))
+
+    async def set_unassigned_behavior(self, *args: Any, **kwargs: Any) -> None:
+        self.calls.append(("set_unassigned_behavior", args, kwargs))
+
+    async def get_zones(self, scene_id: str) -> Any:
+        return SimpleNamespace(
+            groups_revision=4,
+            items=[{"id": "zone-1", "name": "Desk", "role": "primary"}],
+        )
 
 
 def _call(client: _FakeClient, data: dict[str, Any]) -> Any:

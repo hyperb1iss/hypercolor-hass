@@ -15,6 +15,9 @@ apply_effect:
     preset_id:
       selector:
         text:
+    zone_id:
+      selector:
+        text:
     controls:
       selector:
         object:
@@ -76,6 +79,77 @@ activate_scene:
           integration: hypercolor
     scene_id:
       required: true
+      selector:
+        text:
+
+deactivate_scene:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+
+set_zone:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    zone_id:
+      required: true
+      selector:
+        text:
+    scene_id:
+      selector:
+        text:
+    name:
+      selector:
+        text:
+    brightness:
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+    enabled:
+      selector:
+        boolean:
+    make_primary:
+      selector:
+        boolean:
+
+list_zones:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    scene_id:
+      selector:
+        text:
+
+set_unassigned_behavior:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: hypercolor
+    behavior:
+      required: true
+      selector:
+        select:
+          options:
+            - "off"
+            - hold
+            - fallback
+    fallback_zone_id:
+      selector:
+        text:
+    scene_id:
       selector:
         text:
 
