@@ -83,6 +83,9 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
+          # Temporary until hypercolor is listed in home-assistant/brands
+          # (icon/logo submission upstream). Drop this line once merged.
+          ignore: brands
 
   release:
     name: Publish GitHub release
