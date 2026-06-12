@@ -38,6 +38,7 @@ async def fake_daemon(
     app.router.add_put("/api/v1/settings/brightness", daemon.set_brightness)
     app.router.add_put("/api/v1/devices/{device_id}", daemon.update_device)
     app.router.add_post("/api/v1/effects/stop", daemon.stop_effect)
+    app.router.add_patch("/api/v1/scenes/{scene_id}/zones/{zone_id}", daemon.update_zone)
     app.router.add_route("*", "/api/v1/{tail:.*}", daemon.handle_api)
     runner = web.AppRunner(app)
     await runner.setup()
@@ -107,6 +108,45 @@ async def test_config_entry_boots_and_controls_fake_daemon(
     assert fake_daemon.applied_effects[-1] == {
         "effect_id": "solid_color",
         "controls": {"color": "#80ff00"},
+    }
+
+    zone = _first_state(
+        hass, "light", lambda state: state.attributes.get("zone_id") == "zone-primary"
+    )
+    assert zone.state == "on"
+    assert zone.attributes["role"] == "primary"
+    assert zone.attributes["scene_id"] == "default"
+    assert zone.attributes["output_count"] == 1
+
+    await hass.services.async_call(
+        "light",
+        "turn_on",
+        {"entity_id": zone.entity_id, "brightness": 128, "effect": "Rainbow"},
+        blocking=True,
+    )
+
+    assert fake_daemon.zone_updates[-1] == {
+        "scene_id": "default",
+        "zone_id": "zone-primary",
+        "brightness": 0.502,
+    }
+    assert fake_daemon.applied_effects[-1] == {
+        "effect_id": "rainbow",
+        "controls": {},
+        "render_group": "zone-primary",
+    }
+
+    await hass.services.async_call(
+        "light",
+        "turn_off",
+        {"entity_id": zone.entity_id},
+        blocking=True,
+    )
+
+    assert fake_daemon.zone_updates[-1] == {
+        "scene_id": "default",
+        "zone_id": "zone-primary",
+        "enabled": False,
     }
     assert await hass.config_entries.async_unload(entry.entry_id)
 
@@ -186,6 +226,7 @@ class _FakeHypercolorDaemon:
         self.control_updates: list[dict[str, Any]] = []
         self.applied_effects: list[dict[str, Any]] = []
         self.device_updates: list[dict[str, Any]] = []
+        self.zone_updates: list[dict[str, Any]] = []
 
     async def websocket(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(protocols=("hypercolor-v1",))
@@ -219,7 +260,7 @@ class _FakeHypercolorDaemon:
             "GET /effects/active": self._active_effect,
             "GET /devices": lambda: self._items([self._device()]),
             "GET /scenes": lambda: self._items([self._scene()]),
-            "GET /scenes/active": self._scene,
+            "GET /scenes/active": self._active_scene,
             "GET /profiles": lambda: self._items([self._profile()]),
             "GET /layouts": lambda: self._items([self._layout_summary()]),
             "GET /layouts/active": self._layout,
@@ -235,7 +276,10 @@ class _FakeHypercolorDaemon:
         self.active_effect_id = effect_id
         controls = dict(body.get("controls") or {})
         self.control_values.update(controls)
-        self.applied_effects.append({"effect_id": effect_id, "controls": controls})
+        applied = {"effect_id": effect_id, "controls": controls}
+        if body.get("render_group"):
+            applied["render_group"] = body["render_group"]
+        self.applied_effects.append(applied)
         return self._ok(
             {
                 "effect": {"id": effect_id, "name": self._effect_name(effect_id)},
@@ -263,6 +307,19 @@ class _FakeHypercolorDaemon:
     async def stop_effect(self, request: web.Request) -> web.Response:
         self.active_effect_id = ""
         return self._ok({"stopped": True})
+
+    async def update_zone(self, request: web.Request) -> web.Response:
+        body = await _json_body(request)
+        self.zone_updates.append(
+            {
+                "scene_id": request.match_info["scene_id"],
+                "zone_id": request.match_info["zone_id"],
+                **body,
+            }
+        )
+        zone = self._active_scene()["groups"][0]
+        zone.update(body)
+        return self._ok({"zone": zone, "groups_revision": 3})
 
     def _server(self) -> dict[str, Any]:
         return {
@@ -403,6 +460,65 @@ class _FakeHypercolorDaemon:
     @staticmethod
     def _scene() -> dict[str, Any]:
         return {"id": "default", "name": "Default", "description": None, "enabled": True}
+
+    def _active_scene(self) -> dict[str, Any]:
+        return {
+            "id": "default",
+            "name": "Default",
+            "description": None,
+            "enabled": True,
+            "priority": 50,
+            "kind": "ephemeral",
+            "mutation_mode": "live",
+            "groups": [
+                {
+                    "id": "zone-primary",
+                    "name": "Default zone",
+                    "description": None,
+                    "effect_id": self.active_effect_id,
+                    "controls": {},
+                    "preset_id": None,
+                    "layers": [],
+                    "layout": {
+                        "id": "zone-layout",
+                        "name": "Default zone",
+                        "description": None,
+                        "canvas_width": 640,
+                        "canvas_height": 480,
+                        "zones": [
+                            {
+                                "id": "wled-studio:zone_0",
+                                "name": "WLED - Studio",
+                                "device_id": "wled-studio",
+                                "zone_name": "zone_0",
+                                "position": {"x": 0.5, "y": 0.5},
+                                "size": {"x": 1.0, "y": 1.0},
+                                "rotation": 0.0,
+                                "orientation": None,
+                                "topology": {
+                                    "type": "strip",
+                                    "count": 275,
+                                    "direction": "left_to_right",
+                                },
+                                "sampling_mode": None,
+                                "edge_behavior": None,
+                                "shape": None,
+                                "shape_preset": None,
+                            }
+                        ],
+                        "version": 1,
+                    },
+                    "brightness": 1.0,
+                    "enabled": True,
+                    "color": None,
+                    "role": "primary",
+                    "controls_version": 1,
+                    "layers_version": 0,
+                }
+            ],
+            "groups_revision": 2,
+            "unassigned_behavior": "off",
+        }
 
     @staticmethod
     def _profile() -> dict[str, Any]:

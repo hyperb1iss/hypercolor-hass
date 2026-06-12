@@ -26,7 +26,17 @@ async def test_load_state_flattens_status_and_active_resources() -> None:
                 cover_image_url="/api/v1/effects/aurora/cover",
             )
         ),
-        get_active_scene=_async_value(SimpleNamespace(id="scene-1")),
+        get_active_scene=_async_value(
+            SimpleNamespace(
+                id="scene-1",
+                name="Battlestation",
+                groups=[
+                    SimpleNamespace(id="zone-1", name="Desk", role="primary"),
+                    SimpleNamespace(id="zone-2", name="LCD", role="display"),
+                ],
+                groups_revision=7,
+            )
+        ),
         get_active_layout=_async_value(SimpleNamespace(id="layout-1")),
         root_url="http://hyperia.test:9420",
         active_effect_cover_image_url=lambda: (
@@ -45,7 +55,10 @@ async def test_load_state_flattens_status_and_active_resources() -> None:
     assert state["active_preset"] == "soft"
     assert state["global_brightness"] == 66
     assert state["active_scene"] == "scene-1"
+    assert state["active_scene_name"] == "Battlestation"
     assert state["active_layout"] == "layout-1"
+    assert [zone.id for zone in state["zones"]] == ["zone-1", "zone-2"]
+    assert state["groups_revision"] == 7
 
 
 async def test_load_state_resolves_cover_image_without_client_helper() -> None:
