@@ -10,7 +10,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_LIVE_CONTROLS_ENABLED, LIVE_CONTROL_IDS, OPTIONS_DEFAULTS
-from .entity import hub_device_info, read_field
+from .entity import control_scalar, hub_device_info, read_field
 from .runtime_data import HypercolorRuntimeData
 
 _DEFAULTS = {
@@ -81,9 +81,11 @@ class HypercolorLiveControlNumber(CoordinatorEntity, NumberEntity):
             return None
         active = read_field(self.coordinator.data, "active_effect_detail")
         values = read_field(active, "control_values", {})
-        value = read_field(values, read_field(control, "id"))
+        value = control_scalar(read_field(values, read_field(control, "id")))
         if value is None:
-            value = read_field(control, "value", read_field(control, "default"))
+            value = control_scalar(read_field(control, "value", read_field(control, "default")))
+        if value is None:
+            value = control_scalar(read_field(control, "default_value"))
         return float(value) if isinstance(value, (int, float)) else None
 
     async def async_set_native_value(self, value: float) -> None:
@@ -102,6 +104,7 @@ class HypercolorLiveControlNumber(CoordinatorEntity, NumberEntity):
             names = {
                 _normalize(str(read_field(control, "id", ""))),
                 _normalize(str(read_field(control, "label", ""))),
+                _normalize(str(read_field(control, "name", ""))),
             }
             if _normalize(self._control_id) in names:
                 return control

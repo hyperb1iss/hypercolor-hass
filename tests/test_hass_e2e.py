@@ -333,27 +333,32 @@ class _FakeHypercolorDaemon:
             "controls": [
                 {
                     "id": "speed",
-                    "label": "Speed",
-                    "type": "number",
+                    "name": "Speed",
+                    "kind": "number",
+                    "control_type": "slider",
+                    "default_value": {"float": 50.0},
                     "min": 0,
                     "max": 100,
                     "step": 1,
-                    "default": 50,
-                    "value": self.control_values.get("speed"),
                 },
                 {
                     "id": "brightness",
-                    "label": "Brightness",
-                    "type": "number",
+                    "name": "Brightness",
+                    "kind": "number",
+                    "control_type": "slider",
+                    "default_value": {"float": 80.0},
                     "min": 0,
                     "max": 100,
                     "step": 1,
-                    "default": 80,
-                    "value": self.control_values.get("brightness"),
                 },
             ],
-            "control_values": self.control_values,
+            "control_values": {
+                key: {"float": float(value)} if isinstance(value, (int, float)) else value
+                for key, value in self.control_values.items()
+            },
             "active_preset_id": "preset-rainbow",
+            "render_group_id": "zone-primary",
+            "controls_version": 1,
         }
         if self.active_effect_id:
             effect["cover_image_url"] = f"/api/v1/effects/{self.active_effect_id}/cover"
