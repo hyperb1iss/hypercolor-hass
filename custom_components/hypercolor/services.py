@@ -21,7 +21,11 @@ SERVICE_APPLY_EFFECT = "apply_effect"
 SERVICE_SET_COLOR = "set_color"
 SERVICE_SET_CONTROL = "set_control"
 SERVICE_ACTIVATE_SCENE = "activate_scene"
+SERVICE_DEACTIVATE_SCENE = "deactivate_scene"
 SERVICE_CREATE_SCENE = "create_scene"
+SERVICE_SET_ZONE = "set_zone"
+SERVICE_LIST_ZONES = "list_zones"
+SERVICE_SET_UNASSIGNED_BEHAVIOR = "set_unassigned_behavior"
 SERVICE_ACTIVATE_PROFILE = "activate_profile"
 SERVICE_SAVE_PROFILE = "save_profile"
 SERVICE_APPLY_LAYOUT = "apply_layout"
@@ -46,6 +50,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
                 vol.Optional("controls"): dict,
                 vol.Optional("transition"): dict,
                 vol.Optional("preset_id"): cv.string,
+                vol.Optional("zone_id"): cv.string,
             }
         ),
     )
@@ -73,6 +78,46 @@ def async_setup_services(hass: HomeAssistant) -> None:
         SERVICE_ACTIVATE_SCENE,
         _activate_scene,
         _schema({vol.Required("scene_id"): cv.string}),
+    )
+    _register(
+        hass,
+        SERVICE_DEACTIVATE_SCENE,
+        _deactivate_scene,
+        _schema({}),
+    )
+    _register(
+        hass,
+        SERVICE_SET_ZONE,
+        _set_zone,
+        _schema(
+            {
+                vol.Required("zone_id"): cv.string,
+                vol.Optional("scene_id"): cv.string,
+                vol.Optional(CONF_NAME): cv.string,
+                vol.Optional("brightness"): vol.All(int, vol.Range(min=0, max=100)),
+                vol.Optional("enabled"): bool,
+                vol.Optional("make_primary"): bool,
+            }
+        ),
+    )
+    _register(
+        hass,
+        SERVICE_LIST_ZONES,
+        _list_zones,
+        _schema({vol.Optional("scene_id"): cv.string}),
+        supports_response=SupportsResponse.ONLY,
+    )
+    _register(
+        hass,
+        SERVICE_SET_UNASSIGNED_BEHAVIOR,
+        _set_unassigned_behavior,
+        _schema(
+            {
+                vol.Required("behavior"): vol.In(["off", "hold", "fallback"]),
+                vol.Optional("fallback_zone_id"): cv.string,
+                vol.Optional("scene_id"): cv.string,
+            }
+        ),
     )
     _register(
         hass,
@@ -224,8 +269,9 @@ def _schema(fields: dict[Any, Any]) -> vol.Schema:
 
 async def _apply_effect(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
+    zone_id = call.data.get("zone_id")
     if preset_id := call.data.get("preset_id"):
-        await entry.runtime_data.client.apply_preset(preset_id)
+        await entry.runtime_data.client.apply_preset(preset_id, render_group=zone_id)
         return
     effect_id = call.data.get("effect_id")
     if effect_id is None:
@@ -234,6 +280,7 @@ async def _apply_effect(call: ServiceCall) -> None:
         effect_id,
         controls=call.data.get("controls"),
         transition=call.data.get("transition"),
+        render_group=zone_id,
     )
 
 
@@ -256,6 +303,67 @@ async def _set_control(call: ServiceCall) -> None:
 async def _activate_scene(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
     await entry.runtime_data.client.activate_scene(call.data["scene_id"])
+
+
+async def _deactivate_scene(call: ServiceCall) -> None:
+    entry = _entry(call.hass, call)
+    await entry.runtime_data.client.deactivate_scene()
+
+
+async def _set_zone(call: ServiceCall) -> None:
+    entry = _entry(call.hass, call)
+    client = entry.runtime_data.client
+    scene_id = await _resolve_scene_id(entry, call.data.get("scene_id"))
+    updates: dict[str, Any] = {}
+    if (name := call.data.get(CONF_NAME)) is not None:
+        updates["name"] = name
+    if (brightness := call.data.get("brightness")) is not None:
+        updates["brightness"] = round(int(brightness) / 100, 4)
+    if (enabled := call.data.get("enabled")) is not None:
+        updates["enabled"] = enabled
+    if call.data.get("make_primary"):
+        updates["make_primary"] = True
+    if not updates:
+        raise HomeAssistantError("set_zone needs at least one field to change")
+    await client.update_zone(scene_id, call.data["zone_id"], **updates)
+
+
+async def _list_zones(call: ServiceCall) -> dict[str, Any]:
+    entry = _entry(call.hass, call)
+    client = entry.runtime_data.client
+    scene_id = await _resolve_scene_id(entry, call.data.get("scene_id"))
+    result = await client.get_zones(scene_id)
+    return {
+        "scene_id": scene_id,
+        "groups_revision": _field(result, "groups_revision"),
+        "zones": [_jsonable(zone) for zone in _field(result, "items") or []],
+    }
+
+
+async def _set_unassigned_behavior(call: ServiceCall) -> None:
+    entry = _entry(call.hass, call)
+    client = entry.runtime_data.client
+    scene_id = await _resolve_scene_id(entry, call.data.get("scene_id"))
+    behavior: str | dict[str, Any] = call.data["behavior"]
+    if behavior == "fallback":
+        fallback_zone_id = call.data.get("fallback_zone_id")
+        if not fallback_zone_id:
+            raise HomeAssistantError("fallback behavior requires fallback_zone_id")
+        behavior = {"fallback": fallback_zone_id}
+    await client.set_unassigned_behavior(scene_id, behavior)
+
+
+async def _resolve_scene_id(
+    entry: ConfigEntry[HypercolorRuntimeData],
+    scene_id: str | None,
+) -> str:
+    if scene_id:
+        return scene_id
+    active = await entry.runtime_data.client.get_active_scene()
+    resolved = _field(active, "id")
+    if not resolved:
+        raise HomeAssistantError("No active Hypercolor scene")
+    return str(resolved)
 
 
 async def _create_scene(call: ServiceCall) -> dict[str, Any]:
