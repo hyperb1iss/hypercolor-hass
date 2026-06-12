@@ -89,6 +89,7 @@ async def load_state(client: Any) -> dict[str, Any]:
     active_effect_id = read_field(active_effect, "id", read_field(status, "active_effect"))
     active_effect_name = read_field(active_effect, "name", read_field(status, "active_effect"))
     active_effect_cover_image_url = _active_effect_cover_image_url(client, active_effect)
+    zones = read_field(active_scene, "groups", []) or []
     return {
         "status": status,
         "active_effect_detail": active_effect,
@@ -100,7 +101,10 @@ async def load_state(client: Any) -> dict[str, Any]:
         "active_effect_cover_image_url": active_effect_cover_image_url,
         "active_preset": read_field(active_effect, "active_preset_id"),
         "active_scene": read_field(active_scene, "id"),
+        "active_scene_name": read_field(active_scene, "name"),
         "active_layout": read_field(active_layout, "id"),
+        "zones": list(zones),
+        "groups_revision": read_field(active_scene, "groups_revision", 0),
         "global_brightness": read_field(status, "global_brightness"),
         "brightness": read_field(status, "brightness"),
         "device_count": read_field(status, "device_count"),
@@ -258,7 +262,19 @@ def _handle_ws_message(
         _set_coordinator_data(runtime, "audio", current)
     elif message_name == "EventMessage":
         event = str(read_field(message, "event", ""))
-        if event.startswith(("effect", "scene", "profile", "layout", "device")):
+        if event.startswith(
+            (
+                "effect",
+                "scene",
+                "active_scene",
+                "render_group",
+                "layer",
+                "profile",
+                "layout",
+                "device",
+                "brightness",
+            )
+        ):
             _request_refresh(runtime, "state", "catalog", "devices")
 
 

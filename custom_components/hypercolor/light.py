@@ -11,6 +11,7 @@ from homeassistant.components.light import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -46,6 +47,25 @@ async def async_setup_entry(
         if str(read_field(device, "id")) in enabled_devices
     )
     async_add_entities(entities)
+
+    state = entry.runtime_data.coordinators["state"]
+    known_zone_ids: set[str] = set()
+
+    def _sync_zone_entities() -> None:
+        fresh = [
+            zone
+            for zone in renderable_zones(state.data)
+            if str(read_field(zone, "id")) not in known_zone_ids
+        ]
+        if not fresh:
+            return
+        known_zone_ids.update(str(read_field(zone, "id")) for zone in fresh)
+        async_add_entities(
+            HypercolorZoneLight(entry, str(read_field(zone, "id"))) for zone in fresh
+        )
+
+    _sync_zone_entities()
+    entry.async_on_unload(state.async_add_listener(_sync_zone_entities))
 
 
 class HypercolorMasterLight(CoordinatorEntity, LightEntity):
@@ -160,6 +180,125 @@ class HypercolorDeviceLight(CoordinatorEntity, LightEntity):
         return None
 
 
+class HypercolorZoneLight(CoordinatorEntity, LightEntity):
+    """One zone (render group) of the active scene.
+
+    Zones are scene-scoped: when the active scene changes, entities for
+    zones that no longer exist go unavailable, and new zones appear.
+    """
+
+    _attr_color_mode = ColorMode.BRIGHTNESS
+    _attr_has_entity_name = True
+    _attr_supported_features = LightEntityFeature.EFFECT
+
+    def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], zone_id: str) -> None:
+        runtime = entry.runtime_data
+        super().__init__(runtime.coordinators["state"])
+        self._entry = entry
+        self._zone_id = zone_id
+        self._catalog = runtime.coordinators["catalog"]
+        self._attr_device_info = hub_device_info(runtime, entry.data)
+        self._attr_supported_color_modes = {ColorMode.BRIGHTNESS}
+        self._attr_unique_id = f"{runtime.server.instance_id}:zone:{zone_id}"
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._zone is not None
+
+    @property
+    def name(self) -> str | None:
+        if zone := self._zone:
+            return str(read_field(zone, "name", self._zone_id))
+        return f"Zone {self._zone_id}"
+
+    @property
+    def brightness(self) -> int | None:
+        if zone := self._zone:
+            value = read_field(zone, "brightness")
+            if value is not None:
+                return max(0, min(255, round(float(value) * 255)))
+        return None
+
+    @property
+    def is_on(self) -> bool | None:
+        if zone := self._zone:
+            return bool(read_field(zone, "enabled", True))
+        return None
+
+    @property
+    def effect(self) -> str | None:
+        zone = self._zone
+        if zone is None:
+            return None
+        effect_id = read_field(zone, "effect_id")
+        if not effect_id:
+            return None
+        return effect_name_for_id(self._catalog.data, str(effect_id))
+
+    @property
+    def effect_list(self) -> list[str] | None:
+        return effect_names(self._catalog.data)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        zone = self._zone
+        layout = read_field(zone, "layout")
+        outputs = read_field(layout, "zones", []) or []
+        return {
+            "zone_id": self._zone_id,
+            "role": read_field(zone, "role"),
+            "effect_id": read_field(zone, "effect_id"),
+            "preset_id": read_field(zone, "preset_id"),
+            "output_count": len(outputs) if isinstance(outputs, list) else None,
+            "scene_id": read_field(self.coordinator.data, "active_scene"),
+        }
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        client = self._entry.runtime_data.client
+        scene_id = self._scene_id()
+        updates: dict[str, Any] = {}
+        if ATTR_BRIGHTNESS in kwargs:
+            updates["brightness"] = round(int(kwargs[ATTR_BRIGHTNESS]) / 255, 4)
+        if not self.is_on:
+            updates["enabled"] = True
+        if updates:
+            await client.update_zone(scene_id, self._zone_id, **updates)
+
+        effect = kwargs.get(ATTR_EFFECT)
+        if effect:
+            await client.apply_effect(
+                effect_id_for_name(self._catalog.data, str(effect)),
+                render_group=self._zone_id,
+            )
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        client = self._entry.runtime_data.client
+        await client.update_zone(self._scene_id(), self._zone_id, enabled=False)
+        await self.coordinator.async_request_refresh()
+
+    def _scene_id(self) -> str:
+        scene_id = read_field(self.coordinator.data, "active_scene")
+        if not scene_id:
+            raise HomeAssistantError("No active Hypercolor scene")
+        return str(scene_id)
+
+    @property
+    def _zone(self) -> Any | None:
+        for zone in renderable_zones(self.coordinator.data):
+            if str(read_field(zone, "id")) == self._zone_id:
+                return zone
+        return None
+
+
+def renderable_zones(state: Any) -> list[Any]:
+    """Zones of the active scene that render to LEDs (not display faces)."""
+    zones = read_field(state, "zones", []) or []
+    if not isinstance(zones, list):
+        return []
+    return [zone for zone in zones if read_field(zone, "role") != "display"]
+
+
 def effect_names(catalog: Any) -> list[str] | None:
     effects = _catalog_effects(catalog)
     if effects is None:
@@ -175,6 +314,16 @@ def effect_id_for_name(catalog: Any, name: str) -> str:
         if item_name(effect) == name:
             return item_id(effect)
     return name
+
+
+def effect_name_for_id(catalog: Any, effect_id: str) -> str:
+    effects = _catalog_effects(catalog)
+    if effects is None:
+        return effect_id
+    for effect in effects:
+        if item_id(effect) == effect_id:
+            return item_name(effect)
+    return effect_id
 
 
 def _catalog_effects(catalog: Any) -> list[Any] | None:
