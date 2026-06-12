@@ -67,3 +67,18 @@ def read_field(value: Any, field: str, default: Any = None) -> Any:
     if isinstance(value, dict):
         return value.get(field, default)
     return getattr(value, field, default)
+
+
+def control_scalar(value: Any) -> Any:
+    """Unwrap a daemon control value to its scalar.
+
+    The daemon serializes control values externally tagged, e.g.
+    ``{"float": 12.0}`` or ``{"enum": "Palette Blend"}``; older payloads
+    and the control patch path use bare scalars. Colors, gradients, and
+    rects stay as-is.
+    """
+    if isinstance(value, dict) and len(value) == 1:
+        inner = next(iter(value.values()))
+        if isinstance(inner, (int, float, str, bool)):
+            return inner
+    return value
