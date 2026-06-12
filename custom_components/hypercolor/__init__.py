@@ -127,6 +127,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HypercolorConfigEntry) -
 
     _register_child_devices(hass, entry, devices.data)
     _cleanup_opted_out_entities(hass, entry, devices.data)
+    _cleanup_stale_zone_entities(hass, entry, state.data)
 
     reconcile_interval_s = int(
         entry.options.get(CONF_RECONCILE_INTERVAL_S, OPTIONS_DEFAULTS[CONF_RECONCILE_INTERVAL_S])
@@ -243,6 +244,32 @@ def _cleanup_opted_out_entities(
             ):
                 entity_registry.async_remove(entity_id)
         runtime.per_device_entity_ids.discard(slug)
+
+
+def _cleanup_stale_zone_entities(
+    hass: HomeAssistant,
+    entry: HypercolorConfigEntry,
+    state: Any,
+) -> None:
+    """Prune zone lights whose zones no longer exist.
+
+    Zone ids are per-scene UUIDs, so zone churn would otherwise grow the
+    registry without bound. Pruning happens at setup only — mid-session
+    scene switches leave entities unavailable rather than yanking them
+    out from under dashboards.
+    """
+    entity_registry = er.async_get(hass)
+    runtime = entry.runtime_data
+    current_zone_ids = {
+        str(read_field(zone, "id")) for zone in read_field(state, "zones", []) or []
+    }
+    prefix = f"{runtime.server.instance_id}:zone:"
+    for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
+        if not registry_entry.unique_id.startswith(prefix):
+            continue
+        zone_id = registry_entry.unique_id.removeprefix(prefix)
+        if zone_id not in current_zone_ids:
+            entity_registry.async_remove(registry_entry.entity_id)
 
 
 def _domain_for_unique_id(unique_id: str) -> str:

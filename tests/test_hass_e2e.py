@@ -10,6 +10,7 @@ from aiohttp import web
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant, State
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.hypercolor.const import (
@@ -173,11 +174,36 @@ async def test_real_daemon_config_entry_boots(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_stale_zone_entities_are_pruned_at_setup(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    fake_daemon: _FakeHypercolorDaemon,
+) -> None:
+    entry = await _setup_entry(hass, port=fake_daemon.port, setup=False)
+    entity_registry = er.async_get(hass)
+    stale = entity_registry.async_get_or_create(
+        "light",
+        DOMAIN,
+        "srv_e2e:zone:zone-deleted-long-ago",
+        config_entry=entry,
+    )
+
+    await _activate_entry(hass, entry)
+
+    assert entity_registry.async_get(stale.entity_id) is None
+    assert (
+        entity_registry.async_get_entity_id("light", DOMAIN, "srv_e2e:zone:zone-primary")
+        is not None
+    )
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def _setup_entry(
     hass: HomeAssistant,
     *,
     host: str = "127.0.0.1",
     port: int,
+    setup: bool = True,
 ) -> MockConfigEntry:
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -198,11 +224,16 @@ async def _setup_entry(
         },
     )
     entry.add_to_hass(hass)
+    if setup:
+        await _activate_entry(hass, entry)
+    return entry
+
+
+async def _activate_entry(hass: HomeAssistant, entry: MockConfigEntry) -> None:
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.LOADED
-    return entry
 
 
 def _first_state(
