@@ -82,19 +82,26 @@ class HypercolorMasterLight(CoordinatorEntity, LightEntity):
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_supported_color_modes = {ColorMode.BRIGHTNESS}
         self._attr_unique_id = f"{runtime.server.instance_id}:master"
-        self._last_effect_id = self._active_effect_id()
+        self._last_effect_id, self._last_preset_id = self._running_effect_ref()
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        # The daemon forgets the active effect when rendering stops, so keep
-        # the last running one to resume it on a plain turn-on.
-        if effect_id := self._active_effect_id():
+        # The daemon forgets the active effect (and the preset it was applied
+        # with) when rendering stops, so keep the last running pair to resume
+        # the full look on a plain turn-on, not just the bare effect.
+        effect_id, preset_id = self._running_effect_ref()
+        if effect_id:
             self._last_effect_id = effect_id
+            self._last_preset_id = preset_id
         super()._handle_coordinator_update()
 
-    def _active_effect_id(self) -> str | None:
-        value = read_field(self.coordinator.data, "active_effect_id")
-        return str(value) if value else None
+    def _running_effect_ref(self) -> tuple[str | None, str | None]:
+        effect_id = read_field(self.coordinator.data, "active_effect_id")
+        preset_id = read_field(self.coordinator.data, "active_preset")
+        return (
+            str(effect_id) if effect_id else None,
+            str(preset_id) if preset_id else None,
+        )
 
     @property
     def brightness(self) -> int | None:
@@ -140,7 +147,8 @@ class HypercolorMasterLight(CoordinatorEntity, LightEntity):
         elif not self.is_on and (
             resume := self._last_effect_id or first_effect_id(self._catalog.data)
         ):
-            await client.apply_effect(resume)
+            preset = self._last_preset_id if resume == self._last_effect_id else None
+            await client.apply_effect(resume, preset_id=preset)
 
         await self.coordinator.async_request_refresh()
 

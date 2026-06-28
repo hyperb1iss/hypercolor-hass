@@ -222,9 +222,13 @@ async def test_master_turn_on_resumes_last_effect(
     )
     await state_coordinator.async_refresh()
 
-    # A plain turn-on must resume the effect that was running before turn-off,
-    # not leave the daemon stopped.
-    assert {"effect_id": "rainbow", "controls": {}} in fake_daemon.applied_effects
+    # A plain turn-on must resume the effect AND the preset it was running with
+    # before turn-off, not just the bare effect.
+    assert {
+        "effect_id": "rainbow",
+        "controls": {},
+        "preset_id": "preset-rainbow",
+    } in fake_daemon.applied_effects
     resumed = hass.states.get(master.entity_id)
     assert resumed is not None
     assert resumed.state == "on"
@@ -344,6 +348,8 @@ class _FakeHypercolorDaemon:
         applied = {"effect_id": effect_id, "controls": controls}
         if body.get("render_group"):
             applied["render_group"] = body["render_group"]
+        if body.get("preset_id"):
+            applied["preset_id"] = body["preset_id"]
         self.applied_effects.append(applied)
         return self._ok(
             {
