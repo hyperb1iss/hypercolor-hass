@@ -10,7 +10,7 @@ from homeassistant.components.light import (
     LightEntityFeature,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -82,6 +82,19 @@ class HypercolorMasterLight(CoordinatorEntity, LightEntity):
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_supported_color_modes = {ColorMode.BRIGHTNESS}
         self._attr_unique_id = f"{runtime.server.instance_id}:master"
+        self._last_effect_id = self._active_effect_id()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        # The daemon forgets the active effect when rendering stops, so keep
+        # the last running one to resume it on a plain turn-on.
+        if effect_id := self._active_effect_id():
+            self._last_effect_id = effect_id
+        super()._handle_coordinator_update()
+
+    def _active_effect_id(self) -> str | None:
+        value = read_field(self.coordinator.data, "active_effect_id")
+        return str(value) if value else None
 
     @property
     def brightness(self) -> int | None:
@@ -124,6 +137,10 @@ class HypercolorMasterLight(CoordinatorEntity, LightEntity):
         effect = kwargs.get(ATTR_EFFECT)
         if effect:
             await client.apply_effect(effect_id_for_name(self._catalog.data, str(effect)))
+        elif not self.is_on and (
+            resume := self._last_effect_id or first_effect_id(self._catalog.data)
+        ):
+            await client.apply_effect(resume)
 
         await self.coordinator.async_request_refresh()
 
@@ -314,6 +331,13 @@ def effect_id_for_name(catalog: Any, name: str) -> str:
         if item_name(effect) == name:
             return item_id(effect)
     return name
+
+
+def first_effect_id(catalog: Any) -> str | None:
+    effects = _catalog_effects(catalog)
+    if not effects:
+        return None
+    return item_id(effects[0])
 
 
 def effect_name_for_id(catalog: Any, effect_id: str) -> str:

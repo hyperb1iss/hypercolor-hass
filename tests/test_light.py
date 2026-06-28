@@ -4,6 +4,7 @@ from custom_components.hypercolor.light import (
     effect_id_for_name,
     effect_name_for_id,
     effect_names,
+    first_effect_id,
     renderable_zones,
 )
 
@@ -35,6 +36,17 @@ def test_effect_name_for_id_maps_back_to_display_name() -> None:
 
     assert effect_name_for_id(catalog, "neon_rain") == "Neon Rain"
     assert effect_name_for_id(catalog, "unknown") == "unknown"
+
+
+def test_first_effect_id_returns_leading_catalog_id() -> None:
+    catalog = [{"id": "neon_rain", "name": "Neon Rain"}, {"id": "aurora", "name": "Aurora"}]
+
+    assert first_effect_id(catalog) == "neon_rain"
+
+
+def test_first_effect_id_handles_empty_catalog() -> None:
+    assert first_effect_id([]) is None
+    assert first_effect_id(None) is None
 
 
 def test_renderable_zones_excludes_display_faces() -> None:

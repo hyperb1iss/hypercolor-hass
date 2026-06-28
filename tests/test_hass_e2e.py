@@ -198,6 +198,40 @@ async def test_stale_zone_entities_are_pruned_at_setup(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_master_turn_on_resumes_last_effect(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    fake_daemon: _FakeHypercolorDaemon,
+) -> None:
+    entry = await _setup_entry(hass, port=fake_daemon.port)
+    state_coordinator = entry.runtime_data.coordinators["state"]
+    master = _first_state(hass, "light", lambda state: "active_effect_id" in state.attributes)
+    assert master.state == "on"
+    assert master.attributes["effect"] == "Rainbow"
+
+    await hass.services.async_call(
+        "light", "turn_off", {"entity_id": master.entity_id}, blocking=True
+    )
+    await state_coordinator.async_refresh()
+    stopped = hass.states.get(master.entity_id)
+    assert stopped is not None
+    assert stopped.state == "off"
+
+    await hass.services.async_call(
+        "light", "turn_on", {"entity_id": master.entity_id}, blocking=True
+    )
+    await state_coordinator.async_refresh()
+
+    # A plain turn-on must resume the effect that was running before turn-off,
+    # not leave the daemon stopped.
+    assert {"effect_id": "rainbow", "controls": {}} in fake_daemon.applied_effects
+    resumed = hass.states.get(master.entity_id)
+    assert resumed is not None
+    assert resumed.state == "on"
+    assert resumed.attributes["effect"] == "Rainbow"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def _setup_entry(
     hass: HomeAssistant,
     *,
