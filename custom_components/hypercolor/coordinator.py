@@ -32,6 +32,10 @@ from .runtime_data import ConnectionState, HypercolorRuntimeData
 
 _LOGGER = logging.getLogger(__name__)
 
+# A reconnect must not stall on a daemon that accepts the socket but is slow
+# to send its hello frame (websockets only times out the handshake itself).
+WS_CONNECT_TIMEOUT_S = 15
+
 
 class HypercolorCoordinator(DataUpdateCoordinator[Any]):
     def __init__(
@@ -142,7 +146,7 @@ async def websocket_loop(runtime: HypercolorRuntimeData, options: dict[str, Any]
     while True:
         stream = runtime.client.events()
         try:
-            hello = await stream.connect()
+            hello = await asyncio.wait_for(stream.connect(), timeout=WS_CONNECT_TIMEOUT_S)
             runtime.connection_state.set_connected()
             _seed_hello(runtime, hello)
             await _reconcile_after_reconnect(runtime)
