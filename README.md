@@ -146,12 +146,29 @@ Toggle these in the integration's options panel:
 - 🦋 **Per-device entities** (`per_device_entities`) — opt specific device ids in to get
   their own light, identify button, and enabled switch.
 
+### Master light attributes
+
+`light.hypercolor` carries a card-facing snapshot of the running effect so a dashboard
+card (e.g. [hyper-light-card](https://github.com/hyperb1iss/hyper-light-card)) can render
+rich effect info and a full control surface without walking every companion entity:
+
+| Attribute | Meaning |
+| --- | --- |
+| `effect_description` / `effect_publisher` | catalog description and author of the running effect |
+| `effect_tags` / `effect_category` / `effect_version` | catalog metadata for the running effect |
+| `effect_audio_reactive` | whether the running effect reacts to audio |
+| `effect_controls` | normalized control descriptors (`id`, `label`, `kind`, `min`/`max`/`step`, `value`, `options`) for every control the running effect exposes |
+| `effect_image` / `active_effect_cover_image_url` | cover art URL for palette extraction |
+| `active_scene` / `active_scene_id` / `zone_count` / `scene_count` / `device_count` | scene and topology context |
+
 ### Live controls
 
 The four number entities (`brightness`, `speed`, `hue_shift`, `intensity`) bind to the
 matching control on the running effect. Min/max/step come from the effect's metadata, so
 the slider always reflects what the active effect actually exposes. If the effect has no
-matching control, the entity goes unavailable.
+matching control, the entity goes unavailable. Controls beyond these four are still
+exposed to cards through the master light's `effect_controls` attribute and driven with
+the `hypercolor.set_control` service.
 
 ## 🪄 Services
 

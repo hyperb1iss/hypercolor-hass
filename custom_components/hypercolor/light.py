@@ -20,6 +20,7 @@ from .const import CONF_PER_DEVICE_ENTITIES, OPTIONS_DEFAULTS
 from .entity import (
     catalog_items,
     child_device_info,
+    control_scalar,
     hub_device_info,
     item_id,
     item_name,
@@ -119,17 +120,38 @@ class HypercolorMasterLight(CoordinatorEntity, LightEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        cover_image_url = read_field(
-            self.coordinator.data,
-            "active_effect_cover_image_url",
+        state = self.coordinator.data
+        cover_image_url = read_field(state, "active_effect_cover_image_url")
+        active_id = read_field(state, "active_effect_id")
+        active_detail = read_field(state, "active_effect_detail")
+        catalog_entry = active_effect_entry(
+            self._catalog.data,
+            active_id,
+            read_field(state, "active_effect"),
         )
+        metadata = effect_metadata(catalog_entry, active_detail)
         return {
             "active_effect": self.effect,
-            "active_effect_id": read_field(self.coordinator.data, "active_effect_id"),
+            "active_effect_id": active_id,
             "active_effect_cover_image_url": cover_image_url,
-            "device_count": read_field(self.coordinator.data, "device_count"),
+            "device_count": read_field(state, "device_count"),
+            # `effect_image` mirrors the SignalRGB attribute the card reads for
+            # its palette/background source; keep it aliased to the cover URL.
             "effect_image": cover_image_url,
-            "scene_count": read_field(self.coordinator.data, "scene_count"),
+            "scene_count": read_field(state, "scene_count"),
+            "active_scene": read_field(state, "active_scene_name"),
+            "active_scene_id": read_field(state, "active_scene"),
+            "zone_count": len(renderable_zones(state)),
+            # Card-facing effect metadata sourced from the catalog + running
+            # effect. These are the attributes hyper-light-card renders in the
+            # effect-info panel and the generic control surface.
+            "effect_description": metadata["description"],
+            "effect_publisher": metadata["publisher"],
+            "effect_audio_reactive": metadata["audio_reactive"],
+            "effect_tags": metadata["tags"],
+            "effect_category": metadata["category"],
+            "effect_version": metadata["version"],
+            "effect_controls": effect_controls_payload(active_detail),
         }
 
     @property
@@ -322,6 +344,138 @@ def renderable_zones(state: Any) -> list[Any]:
     if not isinstance(zones, list):
         return []
     return [zone for zone in zones if read_field(zone, "role") != "display"]
+
+
+def active_effect_entry(catalog: Any, active_id: Any, active_name: Any) -> Any | None:
+    """The catalog record for the running effect, matched by id then name."""
+    effects = _catalog_effects(catalog)
+    if not effects:
+        return None
+    if active_id is not None:
+        for effect in effects:
+            if item_id(effect) == str(active_id):
+                return effect
+    if active_name:
+        for effect in effects:
+            if item_name(effect) == str(active_name):
+                return effect
+    return None
+
+
+def effect_metadata(catalog_entry: Any, active_detail: Any) -> dict[str, Any]:
+    """Card-facing metadata for the running effect.
+
+    Description/author/tags/category/version come from the catalog record;
+    audio-reactivity prefers the live effect detail and falls back to the
+    catalog flag so the card lights up the audio badge even before the first
+    state push carries an explicit value.
+    """
+    audio_reactive = read_field(active_detail, "audio_reactive")
+    if audio_reactive is None:
+        audio_reactive = read_field(catalog_entry, "audio_reactive", False)
+    tags = read_field(catalog_entry, "tags", []) or []
+    return {
+        "description": read_field(catalog_entry, "description"),
+        "publisher": read_field(catalog_entry, "author", read_field(catalog_entry, "publisher")),
+        "audio_reactive": bool(audio_reactive),
+        "tags": [str(tag) for tag in tags] if isinstance(tags, list) else [],
+        "category": read_field(catalog_entry, "category"),
+        "version": read_field(catalog_entry, "version"),
+    }
+
+
+def effect_controls_payload(active_detail: Any) -> list[dict[str, Any]]:
+    """Normalize the running effect's controls for the card.
+
+    Each entry is a flat, JSON-serializable descriptor the card renders as a
+    slider/toggle/select/color without needing per-effect number entities.
+    Current values prefer the live ``control_values`` map, falling back to the
+    control's own default.
+    """
+    controls = read_field(active_detail, "controls", []) or []
+    if not isinstance(controls, list):
+        return []
+    values = read_field(active_detail, "control_values", {}) or {}
+    payload: list[dict[str, Any]] = []
+    for control in controls:
+        control_id = read_field(control, "id")
+        if control_id is None:
+            continue
+        value = control_scalar(read_field(values, control_id))
+        if value is None:
+            value = control_scalar(read_field(control, "value", read_field(control, "default")))
+        if value is None:
+            value = control_scalar(read_field(control, "default_value"))
+        descriptor: dict[str, Any] = {
+            "id": str(control_id),
+            "label": str(read_field(control, "name", read_field(control, "label", control_id))),
+            # Canonical widget kind the card renders directly (number/boolean/
+            # enum/color/other). The daemon/client name the widget under
+            # `type`, `control_type`, or `kind` depending on the payload path;
+            # collapse them all to one vocabulary here so the card never guesses.
+            "kind": _canonical_control_kind(control),
+            "min": read_field(control, "min", read_field(control, "min_")),
+            "max": read_field(control, "max", read_field(control, "max_")),
+            "step": read_field(control, "step"),
+            "value": value,
+        }
+        options = _control_options(control)
+        if options is not None:
+            descriptor["options"] = options
+        payload.append(descriptor)
+    return payload
+
+
+_BOOLEAN_KINDS = frozenset({"boolean", "bool", "toggle", "switch", "checkbox"})
+_COLOR_KINDS = frozenset({"color", "color_picker", "colorpicker", "rgb", "rgba"})
+_ENUM_KINDS = frozenset({"enum", "select", "dropdown", "combobox", "choice", "variant"})
+_NUMBER_KINDS = frozenset({"number", "slider", "float", "int", "integer", "range"})
+
+
+def _canonical_control_kind(control: Any) -> str:
+    """Collapse the daemon's widget vocabulary to a card-renderable kind.
+
+    Returns one of ``number``/``boolean``/``enum``/``color`` for controls the
+    card can faithfully render and round-trip, or ``other`` for controls it has
+    no safe widget for (text/gradient/rect/asset) so the card skips them rather
+    than mis-rendering them as sliders that corrupt state on interaction.
+    """
+    token = str(
+        read_field(
+            control,
+            "type",
+            read_field(control, "control_type", read_field(control, "kind", "")),
+        )
+        or ""
+    ).lower()
+    if token in _BOOLEAN_KINDS:
+        return "boolean"
+    if token in _COLOR_KINDS:
+        return "color"
+    if token in _ENUM_KINDS:
+        return "enum"
+    if token in _NUMBER_KINDS:
+        return "number"
+    # No recognized widget token; a choice list still implies a selector.
+    if _control_options(control):
+        return "enum"
+    return "other"
+
+
+def _control_options(control: Any) -> list[str] | None:
+    for key in ("options", "labels", "variants", "choices"):
+        raw = read_field(control, key)
+        if isinstance(raw, list) and raw:
+            return [_option_label(item) for item in raw]
+    return None
+
+
+def _option_label(item: Any) -> str:
+    if isinstance(item, dict):
+        for key in ("label", "name", "id", "value"):
+            if (value := item.get(key)) is not None:
+                return str(value)
+    return str(item)
 
 
 def effect_names(catalog: Any) -> list[str] | None:

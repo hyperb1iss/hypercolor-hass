@@ -72,6 +72,18 @@ async def test_config_entry_boots_and_controls_fake_daemon(
     )
     assert "Solid Color" in master.attributes["effect_list"]
 
+    # Card-facing effect metadata is projected from the catalog + running effect.
+    assert master.attributes["effect_description"] == "Test rainbow"
+    assert master.attributes["effect_publisher"] == "Hypercolor"
+    assert master.attributes["effect_audio_reactive"] is False
+    assert master.attributes["effect_tags"] == ["test"]
+    assert master.attributes["effect_category"] == "ambient"
+    controls_by_id = {control["id"]: control for control in master.attributes["effect_controls"]}
+    assert {"speed", "brightness"} <= set(controls_by_id)
+    # Canonical widget kind survives the real client's payload normalization
+    # (daemon `control_type: "slider"` -> legacy `type: "number"` -> `number`).
+    assert controls_by_id["speed"]["kind"] == "number"
+
     speed = _first_state(hass, "number", lambda state: "speed" in state.entity_id)
     assert float(speed.state) == 60.0
 
