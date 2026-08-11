@@ -2,13 +2,16 @@ name: CI
 
 on:
   pull_request:
+  workflow_dispatch:
   push:
     branches: [main]
     tags: ["v*.*.*"]
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: >-
+    ${{ !startsWith(github.ref, 'refs/tags/') &&
+    github.ref != 'refs/heads/main' }}
 
 jobs:
   verify:
@@ -19,15 +22,23 @@ jobs:
 
       - name: Check out Hypercolor client
         env:
+          HYPERCOLOR_REF: ${{ vars.HYPERCOLOR_REF || '68e1feff1bebb6480f2d01b6bbdf511e63d133c0' }}
           HYPERCOLOR_TOKEN: ${{ secrets.HYPERCOLOR_TOKEN }}
         run: |
-          if [ -n "${HYPERCOLOR_TOKEN}" ]; then
-            git clone --depth 1 \
-              "https://x-access-token:${HYPERCOLOR_TOKEN}@github.com/hyperb1iss/hypercolor.git" \
-              ../hypercolor
-          else
-            git clone --depth 1 https://github.com/hyperb1iss/hypercolor ../hypercolor
+          set -euo pipefail
+          if [[ ! "${HYPERCOLOR_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "HYPERCOLOR_REF must be a full commit SHA" >&2
+            exit 1
           fi
+          if [ -n "${HYPERCOLOR_TOKEN}" ]; then
+            remote_url="https://x-access-token:${HYPERCOLOR_TOKEN}@github.com/hyperb1iss/hypercolor.git"
+          else
+            remote_url="https://github.com/hyperb1iss/hypercolor"
+          fi
+          git init -q ../hypercolor
+          git -C ../hypercolor remote add origin "${remote_url}"
+          git -C ../hypercolor fetch --depth 1 origin "${HYPERCOLOR_REF}"
+          git -C ../hypercolor checkout --detach FETCH_HEAD
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
@@ -89,8 +100,12 @@ jobs:
 
   release:
     name: Publish GitHub release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [verify, hassfest]
+    if: >-
+      ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') &&
+      needs.verify.result == 'success' &&
+      needs.hassfest.result == 'success' &&
+      (needs.hacs.result == 'success' || needs.hacs.result == 'skipped') }}
+    needs: [verify, hassfest, hacs]
     runs-on: ubuntu-latest
     permissions:
       contents: write
