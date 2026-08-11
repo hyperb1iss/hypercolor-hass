@@ -16,6 +16,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .brightness import daemon_to_ha, ha_to_daemon
+from .client import async_stop_effect
 from .const import CONF_PER_DEVICE_ENTITIES, OPTIONS_DEFAULTS
 from .entity import (
     catalog_items,
@@ -175,7 +176,7 @@ class HypercolorMasterLight(CoordinatorEntity, LightEntity):
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._entry.runtime_data.client.stop_effect()
+        await async_stop_effect(self._entry.runtime_data.client)
         await self.coordinator.async_request_refresh()
 
 

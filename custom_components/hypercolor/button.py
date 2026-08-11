@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .client import async_stop_effect
 from .const import CONF_PER_DEVICE_ENTITIES, OPTIONS_DEFAULTS
 from .entity import catalog_items, child_device_info, hub_device_info, item_id, read_field
 from .runtime_data import HypercolorRuntimeData
@@ -34,7 +35,7 @@ async def async_setup_entry(
             entry,
             name="Stop effect",
             unique_suffix="stop_effect",
-            action=entry.runtime_data.client.stop_effect,
+            action=lambda: async_stop_effect(entry.runtime_data.client),
         ),
     ]
     enabled_devices = set(

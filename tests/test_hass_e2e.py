@@ -248,6 +248,31 @@ async def test_master_turn_on_resumes_last_effect(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_master_turn_off_and_stop_button_are_idempotent(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    fake_daemon: _FakeHypercolorDaemon,
+) -> None:
+    entry = await _setup_entry(hass, port=fake_daemon.port)
+    master = _first_state(hass, "light", lambda state: "active_effect_id" in state.attributes)
+    stop_button = _first_state(
+        hass,
+        "button",
+        lambda state: state.entity_id.endswith("_stop_effect"),
+    )
+
+    for _ in range(2):
+        await hass.services.async_call(
+            "light", "turn_off", {"entity_id": master.entity_id}, blocking=True
+        )
+    await hass.services.async_call(
+        "button", "press", {"entity_id": stop_button.entity_id}, blocking=True
+    )
+
+    assert fake_daemon.stop_requests == 3
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def _setup_entry(
     hass: HomeAssistant,
     *,
@@ -308,6 +333,7 @@ class _FakeHypercolorDaemon:
         self.applied_effects: list[dict[str, Any]] = []
         self.device_updates: list[dict[str, Any]] = []
         self.zone_updates: list[dict[str, Any]] = []
+        self.stop_requests = 0
 
     async def websocket(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(protocols=("hypercolor-v1",))
@@ -388,6 +414,17 @@ class _FakeHypercolorDaemon:
         return self._ok(self._device())
 
     async def stop_effect(self, request: web.Request) -> web.Response:
+        self.stop_requests += 1
+        if not self.active_effect_id:
+            return web.json_response(
+                {
+                    "error": {
+                        "code": "not_found",
+                        "message": "No effect is currently active",
+                    }
+                },
+                status=404,
+            )
         self.active_effect_id = ""
         return self._ok({"stopped": True})
 
