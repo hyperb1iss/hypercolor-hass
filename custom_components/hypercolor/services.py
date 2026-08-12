@@ -51,7 +51,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         _apply_effect,
         _schema(
             {
-                vol.Optional("effect_id"): cv.string,
+                vol.Required("effect_id"): cv.string,
                 vol.Optional("controls"): dict,
                 vol.Optional("transition"): dict,
                 vol.Optional("preset_id"): cv.string,
@@ -280,70 +280,71 @@ def _schema(fields: dict[Any, Any]) -> vol.Schema:
 
 async def _apply_effect(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
+    runtime = entry.runtime_data
     zone_id = call.data.get("zone_id")
-    if preset_id := call.data.get("preset_id"):
-        effect_id = call.data.get("effect_id")
-        if effect_id is None:
-            raise HomeAssistantError("effect_id is required when preset_id is set")
-        await entry.runtime_data.client.apply_effect_preset(
-            effect_id,
-            preset_id,
+    await runtime.async_mutate(
+        lambda: runtime.client.apply_effect(
+            call.data["effect_id"],
+            controls=call.data.get("controls"),
+            transition=call.data.get("transition"),
+            preset_id=call.data.get("preset_id"),
             render_group=zone_id,
         )
-        return
-    effect_id = call.data.get("effect_id")
-    if effect_id is None:
-        raise HomeAssistantError("effect_id or preset_id is required")
-    await entry.runtime_data.client.apply_effect(
-        effect_id,
-        controls=call.data.get("controls"),
-        transition=call.data.get("transition"),
-        render_group=zone_id,
     )
 
 
 async def _set_color(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
     color = _color_value(call.data)
-    await entry.runtime_data.client.apply_effect(
-        "solid_color",
-        controls={"color": color},
+    runtime = entry.runtime_data
+    await runtime.async_mutate(
+        lambda: runtime.client.apply_effect(
+            "solid_color",
+            controls={"color": color},
+        )
     )
 
 
 async def _set_control(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
-    await entry.runtime_data.client.update_controls(
-        {call.data["control_name"]: call.data["value"]}
+    runtime = entry.runtime_data
+    await runtime.async_mutate(
+        lambda: runtime.client.update_controls({call.data["control_name"]: call.data["value"]})
     )
 
 
 async def _activate_scene(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
-    await entry.runtime_data.client.activate_scene(call.data["scene_id"])
+    runtime = entry.runtime_data
+    await runtime.async_mutate(lambda: runtime.client.activate_scene(call.data["scene_id"]))
 
 
 async def _deactivate_scene(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
-    await entry.runtime_data.client.deactivate_scene()
+    await entry.runtime_data.async_mutate(entry.runtime_data.client.deactivate_scene)
 
 
 async def _set_zone(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
-    client = entry.runtime_data.client
+    runtime = entry.runtime_data
     scene_id = await _resolve_scene_id(entry, call.data.get("scene_id"))
-    updates: dict[str, Any] = {}
-    if (name := call.data.get(CONF_NAME)) is not None:
-        updates["name"] = name
-    if (brightness := call.data.get("brightness")) is not None:
-        updates["brightness"] = round(int(brightness) / 100, 4)
-    if (enabled := call.data.get("enabled")) is not None:
-        updates["enabled"] = enabled
-    if call.data.get("make_primary"):
-        updates["make_primary"] = True
-    if not updates:
+    name = call.data.get(CONF_NAME)
+    brightness_value = call.data.get("brightness")
+    brightness = round(int(brightness_value) / 100, 4) if brightness_value is not None else None
+    enabled = call.data.get("enabled")
+    make_primary = bool(call.data.get("make_primary")) or None
+    if name is None and brightness is None and enabled is None and make_primary is None:
         raise HomeAssistantError("set_zone needs at least one field to change")
-    await client.update_zone(scene_id, call.data["zone_id"], **updates)
+    await runtime.async_mutate(
+        lambda: runtime.client.update_zone(
+            scene_id,
+            call.data["zone_id"],
+            name=name,
+            brightness=brightness,
+            enabled=enabled,
+            make_primary=make_primary,
+        )
+    )
 
 
 async def _list_zones(call: ServiceCall) -> dict[str, Any]:
@@ -353,8 +354,8 @@ async def _list_zones(call: ServiceCall) -> dict[str, Any]:
     result = await client.get_zones(scene_id)
     return {
         "scene_id": scene_id,
-        "groups_revision": _field(result, "groups_revision"),
-        "zones": [_jsonable(zone) for zone in _field(result, "items") or []],
+        "groups_revision": result.groups_revision,
+        "zones": [_jsonable(zone) for zone in result.items],
     }
 
 
@@ -368,7 +369,9 @@ async def _set_unassigned_behavior(call: ServiceCall) -> None:
         if not fallback_zone_id:
             raise HomeAssistantError("fallback behavior requires fallback_zone_id")
         behavior = {"fallback": fallback_zone_id}
-    await client.set_unassigned_behavior(scene_id, behavior)
+    await entry.runtime_data.async_mutate(
+        lambda: client.set_unassigned_behavior(scene_id, behavior)
+    )
 
 
 async def _resolve_scene_id(
@@ -377,100 +380,119 @@ async def _resolve_scene_id(
 ) -> str:
     if scene_id:
         return scene_id
-    active = await entry.runtime_data.client.get_active_scene()
-    resolved = _field(active, "id")
-    if not resolved:
+    active = entry.runtime_data.snapshot.state.active_scene
+    if active is None:
         raise HomeAssistantError("No active Hypercolor scene")
-    return str(resolved)
+    return active.id
 
 
 async def _create_scene(call: ServiceCall) -> dict[str, Any]:
     entry = _entry(call.hass, call)
-    scene = await entry.runtime_data.client.create_scene(
-        call.data[CONF_NAME],
-        description=call.data.get("description"),
-        enabled=call.data.get("enabled"),
-        mutation_mode=call.data.get("mutation_mode"),
+    runtime = entry.runtime_data
+    scene = await runtime.async_mutate(
+        lambda: runtime.client.create_scene(
+            call.data[CONF_NAME],
+            description=call.data.get("description"),
+            enabled=call.data.get("enabled"),
+            mutation_mode=call.data.get("mutation_mode"),
+        )
     )
     return {"scene": _jsonable(scene)}
 
 
 async def _activate_profile(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
-    await entry.runtime_data.client.apply_profile(call.data["profile_id"])
+    runtime = entry.runtime_data
+    await runtime.async_mutate(lambda: runtime.client.apply_profile(call.data["profile_id"]))
 
 
 async def _save_profile(call: ServiceCall) -> dict[str, Any]:
     entry = _entry(call.hass, call)
-    profile = await entry.runtime_data.client.save_profile(
-        call.data[CONF_NAME],
-        description=call.data.get("description"),
-        brightness=call.data.get("brightness"),
-        force=bool(call.data.get("force", False)),
+    runtime = entry.runtime_data
+    profile = await runtime.async_mutate(
+        lambda: runtime.client.save_profile(
+            call.data[CONF_NAME],
+            description=call.data.get("description"),
+            brightness=call.data.get("brightness"),
+            force=bool(call.data.get("force", False)),
+        )
     )
     return {"profile": _jsonable(profile)}
 
 
 async def _apply_layout(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
-    await entry.runtime_data.client.apply_layout(call.data["layout_id"])
+    runtime = entry.runtime_data
+    await runtime.async_mutate(lambda: runtime.client.apply_layout(call.data["layout_id"]))
 
 
 async def _apply_preset(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
-    await entry.runtime_data.client.apply_effect_preset(
-        call.data["effect_id"],
-        call.data["preset_id"],
+    runtime = entry.runtime_data
+    await runtime.async_mutate(
+        lambda: runtime.client.apply_effect_preset(
+            call.data["effect_id"],
+            call.data["preset_id"],
+        )
     )
 
 
 async def _save_preset(call: ServiceCall) -> dict[str, Any]:
     entry = _entry(call.hass, call)
-    state = entry.runtime_data.coordinators["state"].data
-    effect_id = call.data.get("effect_id") or state.get("active_effect_id")
+    runtime = entry.runtime_data
+    effect_id = call.data.get("effect_id") or runtime.snapshot.state.active_effect_id
     if not effect_id:
         raise HomeAssistantError("effect_id is required when no effect is active")
-    preset = await entry.runtime_data.client.save_preset(
-        call.data[CONF_NAME],
-        effect_id,
-        description=call.data.get("description"),
-        controls=call.data.get("controls"),
-        tags=call.data.get("tags"),
+    preset = await runtime.async_mutate(
+        lambda: runtime.client.save_preset(
+            call.data[CONF_NAME],
+            effect_id,
+            description=call.data.get("description"),
+            controls=call.data.get("controls"),
+            tags=call.data.get("tags"),
+        )
     )
     return {"preset": _jsonable(preset)}
 
 
 async def _delete_preset(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
-    await entry.runtime_data.client.delete_preset(call.data["preset_id"])
+    runtime = entry.runtime_data
+    await runtime.async_mutate(lambda: runtime.client.delete_preset(call.data["preset_id"]))
 
 
 async def _list_presets(call: ServiceCall) -> dict[str, Any]:
     entry = _entry(call.hass, call)
-    state = entry.runtime_data.coordinators["state"].data
-    effect_id = call.data.get("effect_id") or state.get("active_effect_id")
+    runtime = entry.runtime_data
+    effect_id = call.data.get("effect_id") or runtime.snapshot.state.active_effect_id
     if not effect_id:
         raise HomeAssistantError("effect_id is required when no effect is active")
-    presets = await entry.runtime_data.client.get_effect_presets(effect_id)
+    presets = await runtime.client.get_effect_presets(effect_id)
     return {"presets": [_jsonable(preset) for preset in presets]}
 
 
 async def _identify_device(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
-    await entry.runtime_data.client.identify_device(
-        call.data["device_id"],
-        duration_ms=call.data.get("duration_ms"),
+    runtime = entry.runtime_data
+    await runtime.async_mutate(
+        lambda: runtime.client.identify_device(
+            call.data["device_id"],
+            duration_ms=call.data.get("duration_ms"),
+        )
     )
 
 
 async def _set_display_face(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
-    await entry.runtime_data.client.set_display_face(
-        call.data["display_id"],
-        call.data["effect_id"],
-        controls=call.data.get("controls"),
-        blend_mode=call.data.get("blend_mode"),
-        opacity=call.data.get("opacity"),
+    runtime = entry.runtime_data
+    await runtime.async_mutate(
+        lambda: runtime.client.set_display_face(
+            call.data["display_id"],
+            call.data["effect_id"],
+            controls=call.data.get("controls"),
+            blend_mode=call.data.get("blend_mode"),
+            opacity=call.data.get("opacity"),
+        )
     )
 
 
@@ -484,7 +506,7 @@ async def _upload_effect(call: ServiceCall) -> dict[str, Any]:
             raise HomeAssistantError("path or html is required")
         try:
             effect_path = await call.hass.async_add_executor_job(
-                partial(Path(path).resolve, strict=True),
+                partial(Path(path).resolve, strict=True)
             )
         except OSError as exc:
             raise HomeAssistantError(f"Unable to read effect file: {exc}") from exc
@@ -500,9 +522,12 @@ async def _upload_effect(call: ServiceCall) -> dict[str, Any]:
     content_size = len(content.encode()) if isinstance(content, str) else len(content)
     if content_size > _MAX_EFFECT_SIZE_BYTES:
         raise HomeAssistantError("Effect content exceeds the 1 MiB upload limit")
-    result = await entry.runtime_data.client.upload_effect(
-        file_name or "hypercolor-effect.html",
-        content,
+    runtime = entry.runtime_data
+    result = await runtime.async_mutate(
+        lambda: runtime.client.upload_effect(
+            file_name or "hypercolor-effect.html",
+            content,
+        )
     )
     return {"effect": result}
 
@@ -547,10 +572,7 @@ async def _run_diagnostics(call: ServiceCall) -> dict[str, Any]:
         },
         "server": asdict(runtime.server),
         "connection": runtime.connection_state.snapshot(),
-        "coordinators": {
-            name: coordinator.last_update_success
-            for name, coordinator in runtime.coordinators.items()
-        },
+        "snapshot_coordinator": runtime.coordinator.last_update_success,
     }
 
 
@@ -574,12 +596,6 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, list):
         return [_jsonable(item) for item in value]
     return value
-
-
-def _field(value: Any, name: str) -> Any:
-    if isinstance(value, dict):
-        return value.get(name)
-    return getattr(value, name, None)
 
 
 def _entry(

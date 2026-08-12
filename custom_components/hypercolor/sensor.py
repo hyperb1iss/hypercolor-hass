@@ -6,10 +6,9 @@ from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_CHANNELS_AUDIO, CONF_CHANNELS_METRICS
-from .entity import hub_device_info, read_field
+from .entity import HypercolorEntity, HypercolorWebsocketEntity, hub_device_info
 from .runtime_data import HypercolorRuntimeData
 
 
@@ -22,84 +21,86 @@ async def async_setup_entry(
         HypercolorActiveEffectSensor(entry),
     ]
     if entry.options.get(CONF_CHANNELS_METRICS, False):
-        entities.extend([HypercolorFpsSensor(entry), HypercolorRenderTimeSensor(entry)])
+        entities.extend(
+            [
+                HypercolorFpsSensor(entry),
+                HypercolorRenderTimeSensor(entry),
+            ]
+        )
     if entry.options.get(CONF_CHANNELS_AUDIO, False):
         entities.append(HypercolorAudioEnergySensor(entry))
     async_add_entities(entities)
 
 
-class HypercolorActiveEffectSensor(CoordinatorEntity, SensorEntity):
+class HypercolorActiveEffectSensor(HypercolorEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_name = "Active effect"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
+        super().__init__(entry)
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["state"])
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:active_effect"
 
     @property
     def native_value(self) -> str | None:
-        value = read_field(self.coordinator.data, "active_effect")
-        return str(value) if value else None
+        return self.snapshot.state.active_effect_name
 
 
-class HypercolorFpsSensor(CoordinatorEntity, SensorEntity):
+class HypercolorFpsSensor(HypercolorWebsocketEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_name = "FPS"
     _attr_native_unit_of_measurement = "fps"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
+        super().__init__(entry)
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["metrics"])
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:fps"
 
     @property
     def native_value(self) -> float | None:
-        fps = read_field(self.coordinator.data, "fps", {})
-        return _first_number(fps, "actual", "delivered", "target")
+        return _nested_number(self.snapshot.metrics, "fps", "actual")
 
 
-class HypercolorRenderTimeSensor(CoordinatorEntity, SensorEntity):
+class HypercolorRenderTimeSensor(HypercolorWebsocketEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_name = "Render time"
     _attr_native_unit_of_measurement = "ms"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
+        super().__init__(entry)
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["metrics"])
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:render_time"
 
     @property
     def native_value(self) -> float | None:
-        frame_time = read_field(self.coordinator.data, "frame_time", {})
-        return _first_number(frame_time, "avg_ms", "p95_ms")
+        return _nested_number(self.snapshot.metrics, "frame_time", "avg_ms")
 
 
-class HypercolorAudioEnergySensor(CoordinatorEntity, SensorEntity):
+class HypercolorAudioEnergySensor(HypercolorWebsocketEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_name = "Audio energy"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
+        super().__init__(entry)
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["audio"])
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:audio_energy"
 
     @property
     def native_value(self) -> float | None:
-        spectrum = read_field(self.coordinator.data, "spectrum", {})
-        return _first_number(spectrum, "level", "energy")
+        spectrum = self.snapshot.audio.spectrum
+        return spectrum.level if spectrum is not None else None
 
 
-def _first_number(data: Any, *keys: str) -> float | None:
-    for key in keys:
-        value = read_field(data, key)
-        if isinstance(value, (int, float)):
-            return float(value)
-    return None
+def _nested_number(data: dict[str, Any], section: str, field: str) -> float | None:
+    values = data.get(section)
+    if not isinstance(values, dict):
+        return None
+    value = values.get(field)
+    return float(value) if isinstance(value, (int, float)) else None

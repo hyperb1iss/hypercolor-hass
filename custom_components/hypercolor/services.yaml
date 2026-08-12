@@ -1,8 +1,4 @@
 apply_effect:
-  target:
-    entity:
-      integration: hypercolor
-      domain: light
   fields:
     config_entry_id:
       required: true
@@ -10,6 +6,7 @@ apply_effect:
         config_entry:
           integration: hypercolor
     effect_id:
+      required: true
       selector:
         text:
     preset_id:

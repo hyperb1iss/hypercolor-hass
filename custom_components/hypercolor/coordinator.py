@@ -4,8 +4,8 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
-from typing import Any
+from time import monotonic
+from typing import Any, Literal, Protocol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -13,7 +13,20 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from websockets.exceptions import InvalidStatus
 
-from hypercolor import HypercolorAuthenticationError, HypercolorNotFoundError
+from hypercolor import HypercolorAuthenticationError
+from hypercolor.models import (
+    ActiveEffect,
+    ActiveScene,
+    AudioDevices,
+    Device,
+    EffectPreset,
+    EffectSummary,
+    Layout,
+    LayoutSummary,
+    ProfileSummary,
+    Scene,
+    SystemState,
+)
 from hypercolor.websocket import EventMessage, MetricsMessage, SpectrumData
 
 from .const import (
@@ -23,162 +36,221 @@ from .const import (
     DOMAIN,
     OPTIONS_DEFAULTS,
 )
-from .entity import read_field
+from .models import HypercolorAudio, HypercolorCatalog, HypercolorSnapshot, HypercolorState
 from .repairs import (
     async_create_auth_issue,
     async_create_unavailable_issue,
     async_delete_auth_issue,
     async_delete_unavailable_issue,
 )
-from .runtime_data import ConnectionState, HypercolorRuntimeData
+from .runtime_data import ConnectionSource, ConnectionState, HypercolorRuntimeData
 
 _LOGGER = logging.getLogger(__name__)
 
-# A reconnect must not stall on a daemon that accepts the socket but is slow
-# to send its hello frame (websockets only times out the handshake itself).
 WS_CONNECT_TIMEOUT_S = 15
 
-_EVENT_REFRESH_TARGETS = {
-    "asset_changed": ("catalog",),
-    "audio_source_changed": ("audio", "state"),
-    "audio_started": ("audio", "state"),
-    "audio_stopped": ("audio", "state"),
-    "config_changed": ("state",),
-    "control_surface_changed": ("devices",),
-    "effect_started": ("catalog", "state"),
-    "effect_stopped": ("catalog", "state"),
-    "effect_registry_updated": ("catalog",),
-    "input_source_changed": ("state",),
-    "library_store_changed": ("catalog",),
-    "profile_deleted": ("catalog",),
-    "profile_loaded": ("state",),
-    "profile_saved": ("catalog",),
-    "scene_library_changed": ("catalog",),
-    "scene_enabled": ("catalog",),
-    "scene_settings_changed": ("catalog", "state"),
-    "session_changed": ("state",),
+_STATE_EVENTS = {
+    "active_scene_changed",
+    "brightness_changed",
+    "effect_activated",
+    "effect_changed",
+    "effect_control_changed",
+    "effect_deactivated",
+    "effect_error",
+    "effect_layer_added",
+    "effect_layer_removed",
+    "effect_started",
+    "effect_stopped",
+    "paused",
+    "render_group_changed",
+    "resumed",
+    "session_changed",
 }
-_EVENT_PREFIX_REFRESH_TARGETS = (
-    ("effect_", ("state",)),
-    ("scene_", ("state",)),
-    ("active_scene_", ("state",)),
-    ("render_group_", ("state",)),
-    ("layer_", ("state",)),
-    ("layout_", ("catalog", "state")),
-    ("device_", ("devices",)),
-)
+_CATALOG_EVENTS = {
+    "effect_registry_updated",
+    "layout_changed",
+    "layout_deleted",
+    "layout_saved",
+    "library_store_changed",
+    "profile_changed",
+    "profile_deleted",
+    "profile_saved",
+    "scene_library_changed",
+    "scene_settings_changed",
+}
+_DEVICE_EVENTS = {
+    "device_connected",
+    "device_disconnected",
+    "device_discovered",
+    "device_discovery_completed",
+    "device_state_changed",
+}
 
 
-class HypercolorCoordinator(DataUpdateCoordinator[Any]):
+class SnapshotClient(Protocol):
+    async def get_status(self) -> SystemState: ...
+
+    async def get_active_effect(self) -> ActiveEffect | None: ...
+
+    async def get_active_scene(self) -> ActiveScene | None: ...
+
+    async def get_active_layout(self) -> Layout | None: ...
+
+    async def get_effects(self) -> list[EffectSummary]: ...
+
+    async def get_scenes(self) -> list[Scene]: ...
+
+    async def get_profiles(self) -> list[ProfileSummary]: ...
+
+    async def get_layouts(self) -> list[LayoutSummary]: ...
+
+    async def get_effect_presets(self, effect_id: str) -> list[EffectPreset]: ...
+
+    async def get_devices(self) -> list[Device]: ...
+
+    async def get_audio_devices(self) -> AudioDevices: ...
+
+    def active_effect_cover_image_url(self) -> str: ...
+
+
+class HypercolorCoordinator(DataUpdateCoordinator[HypercolorSnapshot]):
     def __init__(
         self,
         hass: HomeAssistant,
         *,
         config_entry: ConfigEntry[Any],
-        name: str,
-        loader: Callable[[], Awaitable[Any]],
+        loader: Callable[[HypercolorSnapshot | None], Awaitable[HypercolorSnapshot]],
         connection_state: ConnectionState,
     ) -> None:
         super().__init__(
             hass,
             logger=_LOGGER,
-            name=f"{DOMAIN}.{name}",
+            name=f"{DOMAIN}.snapshot",
             update_interval=None,
             config_entry=config_entry,
         )
         self._loader = loader
         self._connection_state = connection_state
-        self._config_entry = config_entry
+        self.config_entry: ConfigEntry[Any] = config_entry
 
-    async def _async_update_data(self) -> Any:
+    async def _async_update_data(self) -> HypercolorSnapshot:
         try:
-            data = await self._loader()
+            data = await self._loader(self.data)
         except HypercolorAuthenticationError as exc:
-            self._connection_state.set_disconnected(exc)
-            async_create_auth_issue(self.hass, self._config_entry.entry_id)
+            self._connection_state.set_disconnected(ConnectionSource.SNAPSHOT, exc)
+            async_create_auth_issue(self.hass, self.config_entry.entry_id)
             raise ConfigEntryAuthFailed from exc
-        async_delete_auth_issue(self.hass, self._config_entry.entry_id)
+        except Exception as exc:
+            self._connection_state.set_disconnected(ConnectionSource.SNAPSHOT, exc)
+            async_create_unavailable_issue(self.hass, self.config_entry.entry_id)
+            raise
+        if self.data is not None:
+            data = data.with_push_telemetry(self.data)
+        self._connection_state.set_connected(ConnectionSource.SNAPSHOT)
+        async_delete_auth_issue(self.hass, self.config_entry.entry_id)
+        async_delete_unavailable_issue(self.hass, self.config_entry.entry_id)
         return data
 
 
-async def reconcile_loop(
-    coordinators: list[HypercolorCoordinator],
-    interval_s: int,
-) -> None:
+async def reconcile_loop(coordinator: HypercolorCoordinator, interval_s: int) -> None:
     while True:
         await asyncio.sleep(interval_s)
-        await asyncio.gather(
-            *(coordinator.async_request_refresh() for coordinator in coordinators)
-        )
+        await coordinator.async_request_refresh()
 
 
-async def load_state(client: Any) -> dict[str, Any]:
-    status = await client.get_status()
-    active_effect = await client.get_active_effect()
-    active_scene = await client.get_active_scene()
-    active_layout = await client.get_active_layout()
-    active_effect_id = read_field(active_effect, "id", read_field(status, "active_effect"))
-    active_effect_name = read_field(active_effect, "name", read_field(status, "active_effect"))
-    active_effect_definition = None
-    if active_effect_id and callable(get_effect := getattr(client, "get_effect", None)):
-        with contextlib.suppress(HypercolorNotFoundError):
-            active_effect_definition = await get_effect(str(active_effect_id))
-    active_effect_cover_image_url = _active_effect_cover_image_url(client, active_effect)
-    zones = read_field(active_scene, "groups", []) or []
-    return {
-        "status": status,
-        "active_effect_detail": active_effect,
-        "active_effect_definition": active_effect_definition,
-        "active_scene_detail": active_scene,
-        "active_layout_detail": active_layout,
-        "active_effect": active_effect_name,
-        "active_effect_id": active_effect_id,
-        "active_effect_name": active_effect_name,
-        "active_effect_state": read_field(active_effect, "state", "idle"),
-        "active_effect_cover_image_url": active_effect_cover_image_url,
-        "active_preset": read_field(active_effect, "active_preset_id"),
-        "active_preset_modified": bool(read_field(active_effect, "active_preset_modified", False)),
-        "active_scene": read_field(active_scene, "id"),
-        "active_scene_name": read_field(active_scene, "name"),
-        "active_layout": read_field(active_layout, "id"),
-        "zones": list(zones),
-        "groups_revision": read_field(active_scene, "groups_revision", 0),
-        "global_brightness": read_field(status, "global_brightness"),
-        "brightness": read_field(status, "brightness"),
-        "device_count": read_field(status, "device_count"),
-        "scene_count": read_field(status, "scene_count"),
-        "render_loop": read_field(status, "render_loop", {}),
-        "audio_available": read_field(status, "audio_available", False),
-    }
-
-
-async def load_catalog(client: Any) -> dict[str, Any]:
-    active_effect = await _optional(client.get_active_effect)
-    active_effect_id = read_field(active_effect, "id")
-    return {
-        "effects": await client.get_effects(),
-        "scenes": await client.get_scenes(),
-        "profiles": await client.get_profiles(),
-        "layouts": await client.get_layouts(),
-        "preset_effect_id": str(active_effect_id) if active_effect_id else None,
-        "presets": (
-            await client.get_effect_presets(str(active_effect_id)) if active_effect_id else []
+async def load_snapshot(
+    client: SnapshotClient,
+    *,
+    load_audio: bool,
+    previous: HypercolorSnapshot | None = None,
+) -> HypercolorSnapshot:
+    active_effect_task = asyncio.create_task(client.get_active_effect())
+    state_task = load_state(client, active_effect=active_effect_task)
+    catalog_task = load_catalog(client, active_effect=active_effect_task)
+    devices_task = client.get_devices()
+    audio_task = client.get_audio_devices() if load_audio else _empty_audio()
+    state, catalog, devices, audio_devices = await asyncio.gather(
+        state_task,
+        catalog_task,
+        devices_task,
+        audio_task,
+    )
+    previous_audio = previous.audio if previous is not None else HypercolorAudio()
+    return HypercolorSnapshot(
+        state=state,
+        catalog=catalog,
+        devices=tuple(devices),
+        metrics=previous.metrics if previous is not None else {},
+        audio=HypercolorAudio(
+            devices=audio_devices,
+            spectrum=previous_audio.spectrum,
+            beat_until=previous_audio.beat_until,
         ),
-    }
+    )
 
 
-async def load_metrics(client: Any) -> dict[str, Any]:
-    status = await client.get_status()
-    return {
-        "status": status,
-        "fps": {},
-        "frame_time": {},
-    }
+async def load_state(
+    client: SnapshotClient,
+    *,
+    active_effect: Awaitable[ActiveEffect | None] | None = None,
+) -> HypercolorState:
+    active_effect_request = (
+        active_effect if active_effect is not None else client.get_active_effect()
+    )
+    status, active_effect_value, active_scene, active_layout = await asyncio.gather(
+        client.get_status(),
+        active_effect_request,
+        client.get_active_scene(),
+        client.get_active_layout(),
+    )
+    cover_image_url = (
+        client.active_effect_cover_image_url()
+        if active_effect_value is not None and active_effect_value.cover_image_url
+        else None
+    )
+    return HypercolorState(
+        status=status,
+        active_effect=active_effect_value,
+        active_scene=active_scene,
+        active_layout=active_layout,
+        active_effect_cover_image_url=cover_image_url,
+    )
 
 
-async def load_audio(client: Any) -> dict[str, Any]:
-    devices = await client.get_audio_devices()
-    return {"devices": devices, "spectrum": None, "enabled": True}
+async def load_catalog(
+    client: SnapshotClient,
+    *,
+    active_effect: Awaitable[ActiveEffect | None] | None = None,
+) -> HypercolorCatalog:
+    active_effect_request = (
+        active_effect if active_effect is not None else client.get_active_effect()
+    )
+    effects, scenes, profiles, layouts, preset_stack = await asyncio.gather(
+        client.get_effects(),
+        client.get_scenes(),
+        client.get_profiles(),
+        client.get_layouts(),
+        _load_effect_presets(client, active_effect_request),
+    )
+    preset_effect_id, presets = preset_stack
+    return HypercolorCatalog.build(
+        effects=effects,
+        scenes=scenes,
+        profiles=profiles,
+        layouts=layouts,
+        preset_effect_id=preset_effect_id,
+        presets=presets,
+    )
+
+
+async def _load_effect_presets(
+    client: SnapshotClient,
+    active_effect: Awaitable[ActiveEffect | None],
+) -> tuple[str | None, list[EffectPreset]]:
+    effect = await active_effect
+    if effect is None:
+        return None, []
+    return effect.id, await client.get_effect_presets(effect.id)
 
 
 async def websocket_loop(runtime: HypercolorRuntimeData, options: dict[str, Any]) -> None:
@@ -188,11 +260,10 @@ async def websocket_loop(runtime: HypercolorRuntimeData, options: dict[str, Any]
         try:
             hello = await asyncio.wait_for(stream.connect(), timeout=WS_CONNECT_TIMEOUT_S)
             _mark_connected(runtime)
-            _seed_hello(runtime, hello)
-            channels = _websocket_channels(options)
+            channels = _websocket_channels(options, capabilities=set(hello.capabilities))
             if channels:
                 await stream.subscribe(*channels)
-            await _reconcile_after_reconnect(runtime, options)
+            await runtime.coordinator.async_request_refresh()
             backoff_s = 1
             async for message in stream:
                 await _process_ws_message(runtime, message, options)
@@ -202,7 +273,9 @@ async def websocket_loop(runtime: HypercolorRuntimeData, options: dict[str, Any]
             error = _normalize_websocket_error(exc)
             _mark_disconnected(runtime, options, error)
             if isinstance(error, HypercolorAuthenticationError):
-                _start_reauth(runtime)
+                entry = runtime.coordinator.config_entry
+                async_create_auth_issue(runtime.coordinator.hass, entry.entry_id)
+                entry.async_start_reauth(runtime.coordinator.hass)
             _LOGGER.debug("Hypercolor WebSocket disconnected", exc_info=True)
             await asyncio.sleep(backoff_s)
             backoff_s = min(backoff_s * 2, 30)
@@ -211,75 +284,19 @@ async def websocket_loop(runtime: HypercolorRuntimeData, options: dict[str, Any]
                 await stream.disconnect()
 
 
-async def _optional(loader: Callable[[], Awaitable[Any]]) -> Any:
-    try:
-        return await loader()
-    except HypercolorNotFoundError:
-        return None
-
-
-def _active_effect_cover_image_url(client: Any, active_effect: Any) -> str | None:
-    cover_image_url = read_field(active_effect, "cover_image_url")
-    if not cover_image_url:
-        return None
-    return client.active_effect_cover_image_url()
-
-
-def _seed_hello(runtime: HypercolorRuntimeData, hello: Any) -> None:
-    hello_state = read_field(hello, "state")
-    if not isinstance(hello_state, dict):
-        return
-
-    updates: dict[str, Any] = {}
-    if (brightness := read_field(hello_state, "brightness")) is not None:
-        updates.update(global_brightness=brightness, brightness=brightness)
-    if (paused := read_field(hello_state, "paused")) is not None:
-        updates["active_effect_state"] = "paused" if paused else "running"
-    if "effect" in hello_state:
-        effect = read_field(hello_state, "effect")
-        updates.update(
-            active_effect=read_field(effect, "name"),
-            active_effect_id=read_field(effect, "id"),
-        )
-    if "scene" in hello_state:
-        scene = read_field(hello_state, "scene")
-        updates.update(
-            active_scene=read_field(scene, "id"),
-            active_scene_name=read_field(scene, "name"),
-        )
-    if (device_count := read_field(hello_state, "device_count")) is not None:
-        updates["device_count"] = device_count
-    if updates:
-        _patch_coordinator(runtime, "state", **updates)
-    if isinstance(fps := read_field(hello_state, "fps"), dict):
-        _patch_coordinator(runtime, "metrics", fps=fps)
-
-
-async def _reconcile_after_reconnect(
-    runtime: HypercolorRuntimeData,
+def _websocket_channels(
     options: dict[str, Any],
-) -> None:
-    names = ["state", "catalog", "devices"]
-    if options.get(CONF_CHANNELS_METRICS, OPTIONS_DEFAULTS[CONF_CHANNELS_METRICS]):
-        names.append("metrics")
-    if options.get(CONF_CHANNELS_AUDIO, OPTIONS_DEFAULTS[CONF_CHANNELS_AUDIO]):
-        names.append("audio")
-    refreshes = [
-        runtime.coordinators[name].async_request_refresh()
-        for name in names
-        if name in runtime.coordinators
-    ]
-    if refreshes:
-        await asyncio.gather(*refreshes)
-
-
-def _websocket_channels(options: dict[str, Any]) -> list[str]:
+    *,
+    capabilities: set[str] | None = None,
+) -> list[str]:
     channels = ["events"]
     if options.get(CONF_CHANNELS_METRICS, OPTIONS_DEFAULTS[CONF_CHANNELS_METRICS]):
         channels.append("metrics")
     if options.get(CONF_CHANNELS_AUDIO, OPTIONS_DEFAULTS[CONF_CHANNELS_AUDIO]):
         channels.append("spectrum")
-    return channels
+    if capabilities is None:
+        return channels
+    return [channel for channel in channels if channel in capabilities]
 
 
 def _normalize_websocket_error(error: Exception) -> Exception:
@@ -291,158 +308,80 @@ def _normalize_websocket_error(error: Exception) -> Exception:
     return error
 
 
-def _start_reauth(runtime: HypercolorRuntimeData) -> None:
-    state = runtime.coordinators.get("state")
-    if state is None:
-        return
-    async_create_auth_issue(state.hass, state.config_entry.entry_id)
-    state.config_entry.async_start_reauth(state.hass)
-
-
-def _handle_ws_message(
-    runtime: HypercolorRuntimeData,
-    message: Any,
-    options: dict[str, Any],
-) -> None:
-    _mark_connected(runtime)
-    if isinstance(message, MetricsMessage):
-        _set_coordinator_data(
-            runtime, "metrics", _normalize_metrics(read_field(message, "data", {}))
-        )
-    elif isinstance(message, SpectrumData):
-        hold_ms = int(
-            options.get(
-                CONF_AUDIO_BEAT_HOLD_MS,
-                OPTIONS_DEFAULTS[CONF_AUDIO_BEAT_HOLD_MS],
-            )
-        )
-        beat_until = None
-        if read_field(message, "beat", False):
-            beat_until = datetime.now(UTC) + timedelta(milliseconds=hold_ms)
-        current = dict(read_field(runtime.coordinators.get("audio"), "data", {}) or {})
-        current["spectrum"] = {
-            "level": read_field(message, "level", 0.0),
-            "bass": read_field(message, "bass", 0.0),
-            "mid": read_field(message, "mid", 0.0),
-            "treble": read_field(message, "treble", 0.0),
-            "beat": read_field(message, "beat", False),
-            "beat_confidence": read_field(message, "beat_confidence", 0.0),
-            "beat_until": beat_until,
-        }
-        _set_coordinator_data(runtime, "audio", current)
-    elif isinstance(message, EventMessage):
-        event = str(read_field(message, "event", ""))
-        data = read_field(message, "data", {})
-        _handle_event(runtime, event, data)
-
-
 async def _process_ws_message(
     runtime: HypercolorRuntimeData,
-    message: Any,
+    message: object,
     options: dict[str, Any],
 ) -> None:
-    if isinstance(message, EventMessage) and str(read_field(message, "event", "")) == (
-        "resync_required"
-    ):
-        _mark_connected(runtime)
-        await _reconcile_after_reconnect(runtime, options)
+    if isinstance(message, EventMessage) and message.event == "resync_required":
+        if runtime.refresh_tasks:
+            await asyncio.gather(*tuple(runtime.refresh_tasks), return_exceptions=True)
+        await runtime.coordinator.async_request_refresh()
         return
     _handle_ws_message(runtime, message, options)
 
 
+def _handle_ws_message(
+    runtime: HypercolorRuntimeData,
+    message: object,
+    options: dict[str, Any],
+) -> None:
+    _mark_connected(runtime)
+    if isinstance(message, MetricsMessage):
+        runtime.coordinator.async_set_updated_data(
+            runtime.snapshot.with_metrics(_normalize_metrics(message.data))
+        )
+        return
+    if isinstance(message, SpectrumData):
+        hold_ms = int(
+            options.get(CONF_AUDIO_BEAT_HOLD_MS, OPTIONS_DEFAULTS[CONF_AUDIO_BEAT_HOLD_MS])
+        )
+        beat_until = monotonic() + hold_ms / 1000 if message.beat else None
+        runtime.coordinator.async_set_updated_data(
+            runtime.snapshot.with_spectrum(message, beat_until)
+        )
+        return
+    if not isinstance(message, EventMessage):
+        return
+    refresh = event_refresh_kind(message.event)
+    if refresh is not None:
+        _request_refresh(runtime)
+
+
+def event_refresh_kind(
+    event: str,
+) -> Literal["snapshot", "catalog", "devices"] | None:
+    if event in _STATE_EVENTS:
+        return "snapshot"
+    if event in _CATALOG_EVENTS:
+        return "catalog"
+    if event in _DEVICE_EVENTS:
+        return "devices"
+    return None
+
+
+def _request_refresh(runtime: HypercolorRuntimeData) -> None:
+    task = runtime.coordinator.hass.async_create_task(
+        runtime.coordinator.async_request_refresh(),
+    )
+    runtime.refresh_tasks.add(task)
+    task.add_done_callback(runtime.refresh_tasks.discard)
+
+
 def _normalize_metrics(data: Any) -> dict[str, Any]:
     normalized = dict(data) if isinstance(data, dict) else {}
-    normalized["fps"] = read_field(data, "fps", {}) or {}
-    normalized["frame_time"] = read_field(data, "frame_time", {}) or {}
+    normalized["fps"] = data.get("fps", {}) if isinstance(data, dict) else {}
+    normalized["frame_time"] = data.get("frame_time", {}) if isinstance(data, dict) else {}
     return normalized
 
 
-def _handle_event(runtime: HypercolorRuntimeData, event: str, data: Any) -> None:
-    if event == "resync_required":
-        _request_refresh(runtime, *sorted(runtime.coordinators))
-        return
-    if event == "paused":
-        _patch_coordinator(runtime, "state", active_effect_state="paused")
-        return
-    if event == "resumed":
-        _patch_coordinator(runtime, "state", active_effect_state="running")
-        return
-    if event == "brightness_changed":
-        brightness = read_field(data, "new_value")
-        if brightness is not None:
-            _patch_coordinator(
-                runtime,
-                "state",
-                global_brightness=brightness,
-                brightness=brightness,
-            )
-        return
-    if event == "fps_changed":
-        current = dict(read_field(runtime.coordinators.get("metrics"), "data", {}) or {})
-        fps = dict(read_field(current, "fps", {}) or {})
-        fps.update(
-            {
-                "target": read_field(data, "new_target"),
-                "actual": read_field(data, "measured"),
-            }
-        )
-        current["fps"] = fps
-        _set_coordinator_data(runtime, "metrics", current)
-        return
-
-    targets = set(_EVENT_REFRESH_TARGETS.get(event, ()))
-    if not targets:
-        targets.update(
-            target
-            for prefix, prefix_targets in _EVENT_PREFIX_REFRESH_TARGETS
-            if event.startswith(prefix)
-            for target in prefix_targets
-        )
-    if event == "config_changed" and str(read_field(data, "key", "")).startswith("audio."):
-        targets.add("audio")
-    if event == "library_store_changed" and read_field(data, "collection") == "presets":
-        targets.add("state")
-    if targets:
-        _request_refresh(runtime, *sorted(targets))
-
-
-def _set_coordinator_data(
-    runtime: HypercolorRuntimeData,
-    coordinator_name: str,
-    data: Any,
-) -> None:
-    if coordinator := runtime.coordinators.get(coordinator_name):
-        coordinator.async_set_updated_data(data)
-
-
-def _patch_coordinator(
-    runtime: HypercolorRuntimeData,
-    coordinator_name: str,
-    **updates: Any,
-) -> None:
-    coordinator = runtime.coordinators.get(coordinator_name)
-    if coordinator is None:
-        return
-    current = dict(coordinator.data or {})
-    current.update(updates)
-    coordinator.async_set_updated_data(current)
-
-
-def _request_refresh(runtime: HypercolorRuntimeData, *coordinator_names: str) -> None:
-    for coordinator_name in coordinator_names:
-        if coordinator := runtime.coordinators.get(coordinator_name):
-            coordinator.hass.async_create_task(coordinator.async_request_refresh())
-
-
 def _mark_connected(runtime: HypercolorRuntimeData) -> None:
-    if not runtime.connection_state.set_connected():
-        return
+    runtime.connection_state.set_connected(ConnectionSource.WEBSOCKET)
     if runtime.unavailable_task is not None:
         runtime.unavailable_task.cancel()
         runtime.unavailable_task = None
-    state = runtime.coordinators.get("state")
-    if state is not None:
-        async_delete_unavailable_issue(state.hass, state.config_entry.entry_id)
+    entry = runtime.coordinator.config_entry
+    async_delete_unavailable_issue(runtime.coordinator.hass, entry.entry_id)
 
 
 def _mark_disconnected(
@@ -450,15 +389,12 @@ def _mark_disconnected(
     options: dict[str, Any],
     error: BaseException,
 ) -> None:
-    runtime.connection_state.set_disconnected(error)
+    runtime.connection_state.set_disconnected(ConnectionSource.WEBSOCKET, error)
     if runtime.unavailable_task is not None:
         return
-    state = runtime.coordinators.get("state")
-    if state is None:
-        return
     unavailable_after_s = int(options.get("unavailable_after_s", 30))
-    runtime.unavailable_task = state.hass.async_create_task(
-        _mark_unavailable_after(runtime, unavailable_after_s),
+    runtime.unavailable_task = runtime.coordinator.hass.async_create_task(
+        _mark_unavailable_after(runtime, unavailable_after_s)
     )
 
 
@@ -467,12 +403,13 @@ async def _mark_unavailable_after(
     delay_s: int,
 ) -> None:
     await asyncio.sleep(delay_s)
-    if runtime.connection_state.connected:
-        return
-    state = runtime.coordinators.get("state")
-    if state is None:
+    if runtime.connection_state.is_source_connected(ConnectionSource.WEBSOCKET):
         return
     error = ConnectionError("Hypercolor WebSocket is disconnected")
-    for coordinator in runtime.coordinators.values():
-        coordinator.async_set_update_error(error)
-    async_create_unavailable_issue(state.hass, state.config_entry.entry_id)
+    runtime.coordinator.async_set_update_error(error)
+    entry = runtime.coordinator.config_entry
+    async_create_unavailable_issue(runtime.coordinator.hass, entry.entry_id)
+
+
+async def _empty_audio() -> AudioDevices | None:
+    return None

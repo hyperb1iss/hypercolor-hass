@@ -7,10 +7,14 @@ from custom_components.hypercolor.entity import add_configured_device_entities
 
 
 def test_configured_device_entities_follow_live_discovery() -> None:
-    coordinator = _Coordinator([{"id": "wled-office"}])
+    coordinator = _Coordinator()
+    devices = [SimpleNamespace(id="wled-office")]
     entry: Any = SimpleNamespace(
         options={"per_device_entities": ["wled-office", "corsair-lcd"]},
-        runtime_data=SimpleNamespace(coordinators={"devices": coordinator}),
+        runtime_data=SimpleNamespace(
+            coordinator=coordinator,
+            snapshot=SimpleNamespace(devices=devices),
+        ),
         async_on_unload=lambda remove: None,
     )
     added: list[str] = []
@@ -21,9 +25,9 @@ def test_configured_device_entities_follow_live_discovery() -> None:
     add_configured_device_entities(
         entry,
         cast(Any, add_entities),
-        cast(Any, lambda _entry, device: str(device["id"])),
+        cast(Any, lambda _entry, device: str(device.id)),
     )
-    coordinator.data.append({"id": "corsair-lcd"})
+    devices.append(SimpleNamespace(id="corsair-lcd"))
     coordinator.listener()
     coordinator.listener()
 
@@ -31,8 +35,7 @@ def test_configured_device_entities_follow_live_discovery() -> None:
 
 
 class _Coordinator:
-    def __init__(self, data: list[dict[str, str]]) -> None:
-        self.data = data
+    def __init__(self) -> None:
         self.listener = lambda: None
 
     def async_add_listener(self, listener: Any) -> Any:
