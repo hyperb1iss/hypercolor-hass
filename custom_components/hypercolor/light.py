@@ -18,9 +18,9 @@ from hypercolor.models import ActiveEffect, ControlDefinition, Device, EffectSum
 
 from .brightness import daemon_to_ha, ha_to_daemon
 from .entity import (
+    HypercolorDeviceEntity,
     HypercolorEntity,
     add_configured_device_entities,
-    child_device_info,
     hub_device_info,
 )
 from .models import CatalogIndex, control_scalar
@@ -148,16 +148,14 @@ class HypercolorMasterLight(HypercolorEntity, LightEntity):
         await self._runtime.async_mutate(self._runtime.client.pause_rendering)
 
 
-class HypercolorDeviceLight(HypercolorEntity, LightEntity):
+class HypercolorDeviceLight(HypercolorDeviceEntity, LightEntity):
     _attr_color_mode = ColorMode.BRIGHTNESS
     _attr_has_entity_name = True
     _attr_name = None
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], device: Device) -> None:
-        super().__init__(entry)
+        super().__init__(entry, device)
         runtime = entry.runtime_data
-        self._device_id = device.id
-        self._attr_device_info = child_device_info(runtime, device)
         self._attr_supported_color_modes = {ColorMode.BRIGHTNESS}
         self._attr_unique_id = f"{runtime.server.instance_id}:device:{self._device_id}:light"
 
@@ -188,10 +186,6 @@ class HypercolorDeviceLight(HypercolorEntity, LightEntity):
             await self._runtime.client.update_device(self._device_id, enabled=False)
 
         await self._runtime.async_mutate(operation)
-
-    @property
-    def _device(self) -> Device | None:
-        return self.snapshot.device(self._device_id)
 
 
 class HypercolorZoneLight(HypercolorEntity, LightEntity):

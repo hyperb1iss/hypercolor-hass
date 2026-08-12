@@ -9,12 +9,19 @@ from custom_components.hypercolor import (
     entity as entity_module,
 )
 from custom_components.hypercolor.binary_sensor import HypercolorConnectedBinarySensor
+from custom_components.hypercolor.button import (
+    HypercolorActionButton,
+    HypercolorIdentifyDeviceButton,
+)
 from custom_components.hypercolor.entity import (
     HypercolorEntity,
     HypercolorWebsocketEntity,
     add_configured_device_entities,
 )
+from custom_components.hypercolor.light import HypercolorDeviceLight
 from custom_components.hypercolor.runtime_data import ConnectionSource, ConnectionState
+from custom_components.hypercolor.switch import HypercolorDeviceEnabledSwitch
+from hypercolor.models import Device
 
 
 def test_entity_availability_honors_source_outage_deadlines(monkeypatch) -> None:
@@ -184,6 +191,76 @@ def test_configured_device_entities_follow_live_discovery() -> None:
     coordinator.listener()
 
     assert added == ["wled-office", "corsair-lcd"]
+
+
+def test_device_entities_become_unavailable_when_device_disappears() -> None:
+    device = cast(
+        Device,
+        SimpleNamespace(
+            id="wled-office",
+            name="WLED Office",
+            backend="wled",
+            firmware_version="0.15.0",
+        ),
+    )
+    current_device: list[Any] = [device]
+    state = ConnectionState()
+    state.set_connected(ConnectionSource.SNAPSHOT)
+    runtime = SimpleNamespace(
+        coordinator=SimpleNamespace(last_update_success=True),
+        connection_state=state,
+        server=SimpleNamespace(instance_id="instance-1"),
+        snapshot=SimpleNamespace(
+            device=lambda device_id: (
+                current_device[0] if current_device and current_device[0].id == device_id else None
+            )
+        ),
+    )
+    entry: Any = SimpleNamespace(
+        data={"host": "127.0.0.1", "port": 9420},
+        options={"unavailable_after_s": 30},
+        runtime_data=runtime,
+    )
+    entities = (
+        HypercolorDeviceLight(entry, device),
+        HypercolorDeviceEnabledSwitch(entry, device),
+        HypercolorIdentifyDeviceButton(entry, device),
+    )
+
+    assert all(entity.available for entity in entities)
+
+    current_device.clear()
+
+    assert all(not entity.available for entity in entities)
+
+
+def test_action_buttons_follow_hub_availability() -> None:
+    state = ConnectionState()
+    entry: Any = SimpleNamespace(
+        data={"host": "127.0.0.1", "port": 9420},
+        options={"unavailable_after_s": 0},
+        runtime_data=SimpleNamespace(
+            coordinator=SimpleNamespace(last_update_success=False),
+            connection_state=state,
+            server=SimpleNamespace(
+                instance_id="instance-1",
+                instance_name="Test Hypercolor",
+                version="0.3.2",
+            ),
+        ),
+    )
+
+    async def action() -> None:
+        return None
+
+    button = HypercolorActionButton(
+        entry,
+        name="Discover devices",
+        unique_suffix="discover_devices",
+        action=action,
+    )
+
+    assert button.available is False
 
 
 class _Coordinator:

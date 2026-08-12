@@ -147,6 +147,25 @@ class HypercolorWebsocketEntity(HypercolorEntity):
         )
 
 
+class HypercolorDeviceEntity(HypercolorEntity):
+    def __init__(
+        self,
+        entry: ConfigEntry[HypercolorRuntimeData],
+        device: Device,
+    ) -> None:
+        super().__init__(entry)
+        self._device_id = device.id
+        self._attr_device_info = child_device_info(self._runtime, device)
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._device is not None
+
+    @property
+    def _device(self) -> Device | None:
+        return self.snapshot.device(self._device_id)
+
+
 def add_configured_device_entities(
     entry: ConfigEntry[HypercolorRuntimeData],
     async_add_entities: AddEntitiesCallback,

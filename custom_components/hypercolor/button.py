@@ -11,9 +11,9 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from hypercolor.models import Device
 
 from .entity import (
+    HypercolorDeviceEntity,
     HypercolorEntity,
     add_configured_device_entities,
-    child_device_info,
     hub_device_info,
 )
 from .runtime_data import HypercolorRuntimeData
@@ -46,7 +46,7 @@ async def async_setup_entry(
     add_configured_device_entities(entry, async_add_entities, HypercolorIdentifyDeviceButton)
 
 
-class HypercolorActionButton(ButtonEntity):
+class HypercolorActionButton(HypercolorEntity, ButtonEntity):
     _attr_has_entity_name = True
 
     def __init__(
@@ -57,6 +57,7 @@ class HypercolorActionButton(ButtonEntity):
         unique_suffix: str,
         action: Callable[[], Awaitable[object]],
     ) -> None:
+        super().__init__(entry)
         runtime = entry.runtime_data
         self._action = action
         self._attr_name = name
@@ -100,16 +101,16 @@ class HypercolorEffectNavigationButton(HypercolorEntity, ButtonEntity):
         await self._runtime.async_mutate(lambda: self._runtime.client.apply_effect(effect.id))
 
 
-class HypercolorIdentifyDeviceButton(ButtonEntity):
+class HypercolorIdentifyDeviceButton(HypercolorDeviceEntity, ButtonEntity):
     _attr_has_entity_name = True
     _attr_name = "Identify"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], device: Device) -> None:
+        super().__init__(entry, device)
         runtime = entry.runtime_data
-        self._client = runtime.client
-        self._device_id = device.id
-        self._attr_device_info = child_device_info(runtime, device)
         self._attr_unique_id = f"{runtime.server.instance_id}:device:{self._device_id}:identify"
 
     async def async_press(self) -> None:
-        await self._client.identify_device(self._device_id)
+        await self._runtime.async_mutate(
+            lambda: self._runtime.client.identify_device(self._device_id)
+        )

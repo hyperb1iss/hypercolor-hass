@@ -11,9 +11,9 @@ from hypercolor.models import Device
 
 from .const import CONF_CHANNELS_AUDIO
 from .entity import (
+    HypercolorDeviceEntity,
     HypercolorEntity,
     add_configured_device_entities,
-    child_device_info,
     hub_device_info,
 )
 from .runtime_data import HypercolorRuntimeData
@@ -60,15 +60,13 @@ class HypercolorAudioReactiveSwitch(HypercolorEntity, SwitchEntity):
         )
 
 
-class HypercolorDeviceEnabledSwitch(HypercolorEntity, SwitchEntity):
+class HypercolorDeviceEnabledSwitch(HypercolorDeviceEntity, SwitchEntity):
     _attr_has_entity_name = True
     _attr_name = "Enabled"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], device: Device) -> None:
-        super().__init__(entry)
+        super().__init__(entry, device)
         runtime = entry.runtime_data
-        self._device_id = device.id
-        self._attr_device_info = child_device_info(runtime, device)
         self._attr_unique_id = f"{runtime.server.instance_id}:device:{self._device_id}:enabled"
 
     @property
@@ -86,10 +84,6 @@ class HypercolorDeviceEnabledSwitch(HypercolorEntity, SwitchEntity):
             await self._runtime.client.update_device(self._device_id, enabled=False)
 
         await self._runtime.async_mutate(operation)
-
-    @property
-    def _device(self) -> Device | None:
-        return self.snapshot.device(self._device_id)
 
 
 def audio_device_enabled(device_id: str | None) -> bool | None:
