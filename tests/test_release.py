@@ -24,6 +24,15 @@ from scripts.release import (
 HEAD = "a" * 40
 
 
+def test_ci_installs_pinned_just_runner() -> None:
+    setup = Path(".github/actions/setup-hypercolor/action.yml").read_text(encoding="utf-8")
+    ci = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    install = "uv tool install rust-just==1.58.0"
+
+    assert setup.count(install) == 1
+    assert ci.count(install) == 1
+
+
 def test_composite_action_keeps_git_auth_header_on_one_line() -> None:
     action = Path(".github/actions/setup-hypercolor/action.yml").read_text(encoding="utf-8")
     assert "base64 | tr -d '\\n'" in action

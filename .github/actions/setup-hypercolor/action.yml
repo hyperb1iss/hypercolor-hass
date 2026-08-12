@@ -24,6 +24,10 @@ runs:
         enable-cache: true
         cache-dependency-glob: uv.lock
 
+    - name: Set up just
+      shell: bash
+      run: uv tool install rust-just==1.58.0
+
     - name: Set up Python
       shell: bash
       env:
