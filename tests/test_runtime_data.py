@@ -44,31 +44,38 @@ def test_connection_state_tracks_each_source_and_notifies_listeners() -> None:
     assert state.last_error == "socket down"
 
 
-def test_connection_grace_and_snapshot_availability_use_source_timestamps() -> None:
+def test_connection_availability_uses_stable_source_outage_clocks() -> None:
     state = ConnectionState()
     assert state.is_connected(grace_s=5) is False
-    assert state.is_snapshot_available(unavailable_after_s=5) is False
+    assert state.is_available(unavailable_after_s=5) is False
 
     state.set_disconnected(ConnectionSource.SNAPSHOT)
     assert state.is_connected(grace_s=5) is False
     assert state.is_source_connected(ConnectionSource.SNAPSHOT, grace_s=5) is False
 
+    old = datetime.now(UTC) - timedelta(seconds=10)
     state.set_connected(ConnectionSource.SNAPSHOT)
+    snapshot = state.sources[ConnectionSource.SNAPSHOT]
+    snapshot.last_connected_at = old
     state.set_disconnected(ConnectionSource.SNAPSHOT)
 
     assert state.is_connected(grace_s=5) is True
-    assert state.is_snapshot_available(unavailable_after_s=5) is True
+    assert state.is_available(unavailable_after_s=5) is True
 
-    old = datetime.now(UTC) - timedelta(seconds=10)
-    snapshot = state.sources[ConnectionSource.SNAPSHOT]
-    snapshot.last_connected_at = old
+    disconnected_at = snapshot.last_disconnected_at
+    state.set_disconnected(ConnectionSource.SNAPSHOT, RuntimeError("different error"))
+    assert snapshot.last_disconnected_at == disconnected_at
+    unavailable_in = state.source_unavailable_in(ConnectionSource.SNAPSHOT, 5)
+    assert unavailable_in is not None
+    assert 0 < unavailable_in <= 5
+
     snapshot.last_disconnected_at = old
 
     assert state.is_connected(grace_s=5) is False
-    assert state.is_snapshot_available(unavailable_after_s=5) is False
+    assert state.is_available(unavailable_after_s=5) is False
 
     state.set_connected(ConnectionSource.SNAPSHOT)
-    assert state.is_snapshot_available(unavailable_after_s=0) is True
+    assert state.is_available(unavailable_after_s=0) is True
 
 
 def test_source_connection_does_not_hide_websocket_loss_behind_rest_health() -> None:
@@ -82,10 +89,12 @@ def test_source_connection_does_not_hide_websocket_loss_behind_rest_health() -> 
 
     assert state.is_connected() is True
     assert state.is_source_connected(ConnectionSource.WEBSOCKET, grace_s=5) is True
+    assert state.is_available(unavailable_after_s=5) is True
 
     old = datetime.now(UTC) - timedelta(seconds=10)
     state.sources[ConnectionSource.WEBSOCKET].last_disconnected_at = old
     assert state.is_source_connected(ConnectionSource.WEBSOCKET, grace_s=5) is False
+    assert state.is_available(unavailable_after_s=5) is False
 
 
 async def test_mutation_gateway_refreshes_successful_results() -> None:

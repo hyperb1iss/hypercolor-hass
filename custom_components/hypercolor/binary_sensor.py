@@ -59,15 +59,14 @@ class HypercolorConnectedBinarySensor(BinarySensorEntity):
     def _connection_updated(self) -> None:
         self._cancel_timer()
         grace_s = int(self._entry.options.get(CONF_DISCONNECT_GRACE_S, DEFAULT_DISCONNECT_GRACE_S))
-        if (
-            grace_s > 0
-            and not self._entry.runtime_data.connection_state.sources[
-                ConnectionSource.WEBSOCKET
-            ].connected
-        ):
+        unavailable_in = self._entry.runtime_data.connection_state.source_unavailable_in(
+            ConnectionSource.WEBSOCKET,
+            grace_s,
+        )
+        if unavailable_in is not None and unavailable_in > 0:
             self._remove_timer = async_call_later(
                 self.hass,
-                grace_s,
+                unavailable_in,
                 self._connection_grace_expired,
             )
         self.async_write_ha_state()

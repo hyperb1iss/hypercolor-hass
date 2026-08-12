@@ -33,6 +33,7 @@ from .const import (
     CONF_AUDIO_BEAT_HOLD_MS,
     CONF_CHANNELS_AUDIO,
     CONF_CHANNELS_METRICS,
+    CONF_UNAVAILABLE_AFTER_S,
     DOMAIN,
     OPTIONS_DEFAULTS,
 )
@@ -144,7 +145,14 @@ class HypercolorCoordinator(DataUpdateCoordinator[HypercolorSnapshot]):
             data = data.with_push_telemetry(self.data)
         self._connection_state.set_connected(ConnectionSource.SNAPSHOT)
         async_delete_auth_issue(self.hass, self.config_entry.entry_id)
-        async_delete_unavailable_issue(self.hass, self.config_entry.entry_id)
+        unavailable_after_s = int(
+            self.config_entry.options.get(
+                CONF_UNAVAILABLE_AFTER_S,
+                OPTIONS_DEFAULTS[CONF_UNAVAILABLE_AFTER_S],
+            )
+        )
+        if self._connection_state.is_available(unavailable_after_s):
+            async_delete_unavailable_issue(self.hass, self.config_entry.entry_id)
         return data
 
 
@@ -368,7 +376,14 @@ def _mark_connected(runtime: HypercolorRuntimeData) -> None:
         runtime.unavailable_task.cancel()
         runtime.unavailable_task = None
     entry = runtime.coordinator.config_entry
-    async_delete_unavailable_issue(runtime.coordinator.hass, entry.entry_id)
+    unavailable_after_s = int(
+        entry.options.get(
+            CONF_UNAVAILABLE_AFTER_S,
+            OPTIONS_DEFAULTS[CONF_UNAVAILABLE_AFTER_S],
+        )
+    )
+    if runtime.connection_state.is_available(unavailable_after_s):
+        async_delete_unavailable_issue(runtime.coordinator.hass, entry.entry_id)
 
 
 def _mark_disconnected(
@@ -392,8 +407,6 @@ async def _mark_unavailable_after(
     await asyncio.sleep(delay_s)
     if runtime.connection_state.is_source_connected(ConnectionSource.WEBSOCKET):
         return
-    error = ConnectionError("Hypercolor WebSocket is disconnected")
-    runtime.coordinator.async_set_update_error(error)
     entry = runtime.coordinator.config_entry
     async_create_unavailable_issue(runtime.coordinator.hass, entry.entry_id)
 

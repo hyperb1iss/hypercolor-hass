@@ -194,7 +194,7 @@ def test_ws_rejected_handshake_is_typed_as_authentication_failure() -> None:
     assert isinstance(error, HypercolorAuthenticationError)
 
 
-async def test_websocket_disconnect_marks_snapshot_unavailable_after_threshold(
+async def test_websocket_disconnect_creates_unavailable_issue_after_threshold(
     monkeypatch,
 ) -> None:
     created_issues: list[str] = []
@@ -216,7 +216,7 @@ async def test_websocket_disconnect_marks_snapshot_unavailable_after_threshold(
     _mark_disconnected(runtime, {"unavailable_after_s": 0}, ConnectionError("offline"))
     await runtime.unavailable_task
 
-    assert isinstance(coordinator.update_error, ConnectionError)
+    assert state.is_available(0) is False
     assert created_issues == ["entry-1"]
 
 
@@ -362,18 +362,14 @@ class SnapshotClientFixture:
 class _UnavailableCoordinator:
     def __init__(self) -> None:
         self.hass = SimpleNamespace(async_create_task=asyncio.create_task)
-        self.config_entry = SimpleNamespace(entry_id="entry-1")
-        self.update_error: BaseException | None = None
-
-    def async_set_update_error(self, error: BaseException) -> None:
-        self.update_error = error
+        self.config_entry = SimpleNamespace(entry_id="entry-1", options={})
 
 
 class _PushCoordinator:
     def __init__(self, data: HypercolorSnapshot) -> None:
         self.data = data
         self.hass = SimpleNamespace(async_create_task=asyncio.create_task)
-        self.config_entry = SimpleNamespace(entry_id="entry-1")
+        self.config_entry = SimpleNamespace(entry_id="entry-1", options={})
         self.refreshed = asyncio.Event()
         self.refreshes = 0
 

@@ -33,10 +33,20 @@ class DeviceEntityFactory(Protocol):
 
 
 class HypercolorEntity(CoordinatorEntity[DataUpdateCoordinator[HypercolorSnapshot]]):
+    _availability_timer: CALLBACK_TYPE | None = None
+
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
         self._entry = entry
         self._runtime = entry.runtime_data
         super().__init__(self._runtime.coordinator)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(self._cancel_availability_timer)
+        self.async_on_remove(
+            self._runtime.connection_state.add_listener(self._availability_updated)
+        )
+        self._availability_updated()
 
     @property
     def snapshot(self) -> HypercolorSnapshot:
@@ -50,9 +60,36 @@ class HypercolorEntity(CoordinatorEntity[DataUpdateCoordinator[HypercolorSnapsho
                 OPTIONS_DEFAULTS[CONF_UNAVAILABLE_AFTER_S],
             )
         )
-        return super().available and self._runtime.connection_state.is_snapshot_available(
-            unavailable_after_s
+        return self._runtime.connection_state.is_available(unavailable_after_s)
+
+    @callback
+    def _availability_updated(self) -> None:
+        self._cancel_availability_timer()
+        unavailable_after_s = int(
+            self._entry.options.get(
+                CONF_UNAVAILABLE_AFTER_S,
+                OPTIONS_DEFAULTS[CONF_UNAVAILABLE_AFTER_S],
+            )
         )
+        unavailable_in = self._runtime.connection_state.unavailable_in(unavailable_after_s)
+        if unavailable_in is not None and unavailable_in > 0:
+            self._availability_timer = async_call_later(
+                self.hass,
+                unavailable_in,
+                self._availability_expired,
+            )
+        self.async_write_ha_state()
+
+    @callback
+    def _availability_expired(self, *_: object) -> None:
+        self._availability_timer = None
+        self.async_write_ha_state()
+
+    @callback
+    def _cancel_availability_timer(self) -> None:
+        if self._availability_timer is not None:
+            self._availability_timer()
+            self._availability_timer = None
 
 
 class HypercolorWebsocketEntity(HypercolorEntity):
@@ -73,13 +110,14 @@ class HypercolorWebsocketEntity(HypercolorEntity):
                 DEFAULT_DISCONNECT_GRACE_S,
             )
         )
-        if (
-            grace_s > 0
-            and not self._runtime.connection_state.sources[ConnectionSource.WEBSOCKET].connected
-        ):
+        unavailable_in = self._runtime.connection_state.source_unavailable_in(
+            ConnectionSource.WEBSOCKET,
+            grace_s,
+        )
+        if unavailable_in is not None and unavailable_in > 0:
             self._connection_timer = async_call_later(
                 self.hass,
-                grace_s,
+                unavailable_in,
                 self._connection_grace_expired,
             )
         self.async_write_ha_state()

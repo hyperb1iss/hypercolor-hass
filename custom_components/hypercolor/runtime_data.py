@@ -80,14 +80,13 @@ class ConnectionState:
     ) -> None:
         state = self.sources[source]
         error_text = str(error) if error else None
-        if (
-            not state.connected
-            and state.last_disconnected_at is not None
-            and state.last_error == error_text
-        ):
+        outage_started = state.connected or state.last_disconnected_at is None
+        error_changed = state.last_error != error_text
+        if not outage_started and not error_changed:
             return
         state.connected = False
-        state.last_disconnected_at = datetime.now(UTC)
+        if outage_started:
+            state.last_disconnected_at = datetime.now(UTC)
         state.last_error = error_text
         self._notify_listeners()
 
@@ -102,23 +101,42 @@ class ConnectionState:
         return (datetime.now(UTC) - disconnected_at).total_seconds() < grace_s
 
     def is_source_connected(self, source: ConnectionSource, grace_s: int = 0) -> bool:
+        unavailable_in = self.source_unavailable_in(source, grace_s)
+        return unavailable_in is None or unavailable_in > 0
+
+    def source_unavailable_in(
+        self,
+        source: ConnectionSource,
+        grace_s: int,
+    ) -> float | None:
         health = self.sources[source]
         if health.connected:
-            return True
+            return None
         if health.last_connected_at is None:
-            return False
+            return 0
         if health.last_disconnected_at is None:
-            return False
-        return (datetime.now(UTC) - health.last_disconnected_at).total_seconds() < grace_s
+            return 0
+        outage_age_s = (datetime.now(UTC) - health.last_disconnected_at).total_seconds()
+        return max(grace_s - outage_age_s, 0)
 
-    def is_snapshot_available(self, unavailable_after_s: int) -> bool:
+    def is_available(self, unavailable_after_s: int) -> bool:
+        unavailable_in = self.unavailable_in(unavailable_after_s)
+        return unavailable_in is None or unavailable_in > 0
+
+    def unavailable_in(self, unavailable_after_s: int) -> float | None:
         snapshot = self.sources[ConnectionSource.SNAPSHOT]
-        if snapshot.connected:
-            return True
-        if snapshot.last_connected_at is None:
-            return False
-        age = datetime.now(UTC) - snapshot.last_connected_at
-        return age.total_seconds() < unavailable_after_s
+        if not snapshot.connected and snapshot.last_connected_at is None:
+            return 0
+        now = datetime.now(UTC)
+        deadlines = [
+            max(
+                unavailable_after_s - (now - state.last_disconnected_at).total_seconds(),
+                0,
+            )
+            for state in self.sources.values()
+            if not state.connected and state.last_disconnected_at is not None
+        ]
+        return min(deadlines, default=None)
 
     def add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
         self._listeners.add(listener)
