@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from hypercolor.models.system import RenderLoopStatus
-from hypercolor.websocket import EventMessage, SpectrumData
+from hypercolor.websocket import EventMessage, MetricsMessage, SpectrumData
 from websockets.datastructures import Headers
 from websockets.exceptions import InvalidStatus
 from websockets.http11 import Response
@@ -16,7 +16,7 @@ from custom_components.hypercolor.coordinator import (
     _normalize_websocket_error,
     _process_ws_message,
     _websocket_channels,
-    event_refresh_kind,
+    event_requires_refresh,
     load_catalog,
     load_snapshot,
     load_state,
@@ -144,12 +144,12 @@ async def test_rest_refresh_preserves_websocket_telemetry() -> None:
     assert refreshed.audio.beat_until == 42.0
 
 
-def test_event_refresh_routing_is_exact() -> None:
-    assert event_refresh_kind("effect_started") == "snapshot"
-    assert event_refresh_kind("effect_registry_updated") == "catalog"
-    assert event_refresh_kind("device_connected") == "devices"
-    assert event_refresh_kind("device_metrics") is None
-    assert event_refresh_kind("device_future_unknown") is None
+def test_event_refresh_filter_is_exact() -> None:
+    assert event_requires_refresh("effect_started") is True
+    assert event_requires_refresh("effect_registry_updated") is True
+    assert event_requires_refresh("device_connected") is True
+    assert event_requires_refresh("device_metrics") is False
+    assert event_requires_refresh("device_future_unknown") is False
 
 
 def test_websocket_channels_intersect_daemon_capabilities() -> None:
@@ -218,6 +218,59 @@ async def test_websocket_disconnect_marks_snapshot_unavailable_after_threshold(
 
     assert isinstance(coordinator.update_error, ConnectionError)
     assert created_issues == ["entry-1"]
+
+
+async def test_websocket_messages_preserve_typed_push_telemetry(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        coordinator_module,
+        "async_delete_unavailable_issue",
+        lambda _hass, _entry_id: None,
+    )
+    coordinator = _PushCoordinator(await load_snapshot(SnapshotClientFixture(), load_audio=True))
+    runtime: Any = _PushRuntime(coordinator)
+
+    await _process_ws_message(
+        runtime,
+        MetricsMessage(
+            timestamp="2026-08-12T00:00:00Z",
+            data={
+                "fps": {"actual": 59.8},
+                "frame_time": {"avg_ms": 16.7},
+                "queue_depth": 2,
+            },
+        ),
+        {},
+    )
+    spectrum = SpectrumData(
+        timestamp_ms=123,
+        bin_count=2,
+        level=0.8,
+        bass=0.7,
+        mid=0.4,
+        treble=0.2,
+        beat=True,
+        beat_confidence=0.9,
+        bins=[0.7, 0.2],
+    )
+    await _process_ws_message(runtime, spectrum, {"audio_beat_hold_ms": 200})
+    await _process_ws_message(
+        runtime,
+        EventMessage(event="effect_started", timestamp="", data={}),
+        {},
+    )
+    await coordinator.refreshed.wait()
+
+    assert coordinator.data.metrics == {
+        "fps": {"actual": 59.8},
+        "frame_time": {"avg_ms": 16.7},
+        "queue_depth": 2,
+    }
+    assert coordinator.data.audio.spectrum is spectrum
+    assert coordinator.data.audio.beat_until is not None
+    assert runtime.connection_state.is_source_connected(ConnectionSource.WEBSOCKET)
+    assert coordinator.refreshes == 1
 
 
 class SnapshotClientFixture:
@@ -314,6 +367,34 @@ class _UnavailableCoordinator:
 
     def async_set_update_error(self, error: BaseException) -> None:
         self.update_error = error
+
+
+class _PushCoordinator:
+    def __init__(self, data: HypercolorSnapshot) -> None:
+        self.data = data
+        self.hass = SimpleNamespace(async_create_task=asyncio.create_task)
+        self.config_entry = SimpleNamespace(entry_id="entry-1")
+        self.refreshed = asyncio.Event()
+        self.refreshes = 0
+
+    def async_set_updated_data(self, data: HypercolorSnapshot) -> None:
+        self.data = data
+
+    async def async_request_refresh(self) -> None:
+        self.refreshes += 1
+        self.refreshed.set()
+
+
+class _PushRuntime:
+    def __init__(self, coordinator: _PushCoordinator) -> None:
+        self.coordinator = coordinator
+        self.connection_state = ConnectionState()
+        self.unavailable_task = None
+        self.refresh_tasks: set[asyncio.Task[None]] = set()
+
+    @property
+    def snapshot(self) -> HypercolorSnapshot:
+        return self.coordinator.data
 
 
 def _status() -> SystemState:

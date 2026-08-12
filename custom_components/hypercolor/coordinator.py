@@ -5,7 +5,7 @@ import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from time import monotonic
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -49,7 +49,7 @@ _LOGGER = logging.getLogger(__name__)
 
 WS_CONNECT_TIMEOUT_S = 15
 
-_STATE_EVENTS = {
+_REFRESH_EVENTS = {
     "active_scene_changed",
     "brightness_changed",
     "effect_activated",
@@ -65,8 +65,6 @@ _STATE_EVENTS = {
     "render_group_changed",
     "resumed",
     "session_changed",
-}
-_CATALOG_EVENTS = {
     "effect_registry_updated",
     "layout_changed",
     "layout_deleted",
@@ -77,8 +75,6 @@ _CATALOG_EVENTS = {
     "profile_saved",
     "scene_library_changed",
     "scene_settings_changed",
-}
-_DEVICE_EVENTS = {
     "device_connected",
     "device_disconnected",
     "device_discovered",
@@ -343,21 +339,12 @@ def _handle_ws_message(
         return
     if not isinstance(message, EventMessage):
         return
-    refresh = event_refresh_kind(message.event)
-    if refresh is not None:
+    if event_requires_refresh(message.event):
         _request_refresh(runtime)
 
 
-def event_refresh_kind(
-    event: str,
-) -> Literal["snapshot", "catalog", "devices"] | None:
-    if event in _STATE_EVENTS:
-        return "snapshot"
-    if event in _CATALOG_EVENTS:
-        return "catalog"
-    if event in _DEVICE_EVENTS:
-        return "devices"
-    return None
+def event_requires_refresh(event: str) -> bool:
+    return event in _REFRESH_EVENTS
 
 
 def _request_refresh(runtime: HypercolorRuntimeData) -> None:
