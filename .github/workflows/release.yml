@@ -68,7 +68,7 @@ jobs:
 
       - name: Check out Hypercolor client
         env:
-          HYPERCOLOR_REF: ${{ vars.HYPERCOLOR_REF || 'd26cbe8dddd85a358c71c0e8d481b1dcc142edf9' }}
+          HYPERCOLOR_REF: ${{ vars.HYPERCOLOR_REF || '9a57d8dfe91248adde3b0cff761663b9ef833f4c' }}
           HYPERCOLOR_TOKEN: ${{ secrets.HYPERCOLOR_TOKEN }}
         run: |
           set -euo pipefail
