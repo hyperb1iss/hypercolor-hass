@@ -73,7 +73,7 @@ built directly on this integration's catalog, live controls, and effect cover ar
 ## 📡 Requirements
 
 - Home Assistant **2026.4.4** or newer
-- Python **3.14.2+** (HA's runtime floor for this release)
+- Python **3.14.2 through 3.14.x** (HA's runtime range for this release)
 - A reachable Hypercolor daemon (default port `9420`)
 - Optional: an API key, if your daemon has auth turned on
 
@@ -283,7 +283,7 @@ Python 3.14, ruff, ty, pytest. The dev tooling expects a sibling checkout of
 client can be installed editable.
 
 ```bash
-git clone https://github.com/hyperb1iss/hypercolor.git ../hypercolor
+git clone https://github.com/hyperb1iss/hypercolor.git
 git clone https://github.com/hyperb1iss/hypercolor-hass.git
 cd hypercolor-hass
 
