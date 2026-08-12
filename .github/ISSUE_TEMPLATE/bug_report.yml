@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Thanks for filing! The most useful payload for diagnosing problems is
-        `hypercolor.run_diagnostics` — it returns daemon health and coordinator state
+        `hypercolor.run_diagnostics` because it returns daemon health and coordinator state
         with hosts and keys redacted.
 
   - type: textarea

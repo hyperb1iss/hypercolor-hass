@@ -122,7 +122,7 @@ the device tree reads naturally.
 
 | Entity | Type | Purpose |
 | --- | --- | --- |
-| `light.hypercolor` | light | master power, brightness, effect picker |
+| `light.hypercolor` | light | pause or resume output, set brightness, and pick effects |
 | `binary_sensor.hypercolor_connected` | binary_sensor | live connectivity to the daemon |
 | `sensor.hypercolor_active_effect` | sensor | display name of the running effect |
 | `select.hypercolor_scene` | select | activate a scene |
@@ -134,16 +134,20 @@ the device tree reads naturally.
 | `button.hypercolor_discover_devices` | button | re-run device discovery |
 | `number.hypercolor_brightness` / `speed` / `hue_shift` / `intensity` | number | live patches into the running effect |
 
+Turning the master light off pauses output without discarding the active effect, preset,
+or controls. Turning it back on resumes that exact state. The Stop button is the separate,
+destructive action that clears the active effect.
+
 ### Optional channels
 
 Toggle these in the integration's options panel:
 
-- 🌊 **Audio entities** (`channels.audio`) — adds `binary_sensor.hypercolor_audio_beat`,
+- 🌊 **Audio entities** (`channels.audio`) adds `binary_sensor.hypercolor_audio_beat`,
   `binary_sensor.hypercolor_audio_reactive_active`, `sensor.hypercolor_audio_energy`,
   `select.hypercolor_audio_device`, and `switch.hypercolor_audio_reactive`.
 - 🧪 **Metrics entities** (`channels.metrics`): adds `sensor.hypercolor_fps` and
   `sensor.hypercolor_render_time`.
-- 🦋 **Per-device entities** (`per_device_entities`) — opt specific device ids in to get
+- 🦋 **Per-device entities** (`per_device_entities`) lets you opt specific device ids in to get
   their own light, identify button, and enabled switch.
 
 ### Master light attributes
@@ -159,6 +163,7 @@ rich effect info and a full control surface without walking every companion enti
 | `effect_audio_reactive` | whether the running effect reacts to audio |
 | `effect_controls` | normalized control descriptors (`id`, `label`, `kind`, `min`/`max`/`step`, `value`, `options`) for every control the running effect exposes |
 | `effect_image` / `active_effect_cover_image_url` | cover art URL for palette extraction |
+| `active_preset_id` / `active_preset_modified` | selected preset derivation and whether live controls diverged from it |
 | `active_scene` / `active_scene_id` / `zone_count` / `scene_count` / `device_count` | scene and topology context |
 
 ### Live controls
@@ -172,15 +177,16 @@ the `hypercolor.set_control` service.
 
 ## 🪄 Services
 
-Sixteen services cover the daemon's full surface area. All of them take `config_entry_id`
-so multi-daemon setups stay unambiguous.
+Twenty services cover Hypercolor's Home Assistant automation surface. All of them take
+`config_entry_id` so multi-daemon setups stay unambiguous.
 
 | Service | What it does |
 | --- | --- |
 | `hypercolor.apply_effect` | apply an effect by id, optionally with controls, transition, or an effect-scoped preset id |
 | `hypercolor.set_color` | shortcut for the `solid_color` effect, takes `hex` or `r/g/b` |
 | `hypercolor.set_control` | patch a single control on the running effect |
-| `hypercolor.activate_scene` / `create_scene` | activate or create a scene |
+| `hypercolor.activate_scene` / `deactivate_scene` / `create_scene` | activate, deactivate, or create a scene |
+| `hypercolor.set_zone` / `list_zones` / `set_unassigned_behavior` | inspect and configure scene zones |
 | `hypercolor.activate_profile` / `save_profile` | activate or capture a profile |
 | `hypercolor.apply_layout` | switch spatial layouts |
 | `hypercolor.apply_preset` | apply a bundled or saved preset by `effect_id` and `preset_id` |
@@ -261,11 +267,13 @@ that becomes the integration's unique id. That means the same daemon keeps the s
 entry across IP changes, container restarts, and network re-shuffles.
 
 The integration also runs a background WebSocket session against the daemon. Events
-patch authoritative state immediately and refresh only the affected coordinator; metrics
-and audio spectrum are opt-in channels that ride the same socket. If the WebSocket drops,
-the integration backs off exponentially and retries forever, so HA's connectivity sensor
-reflects reality without needing per-tick polling. Periodic reconciliation is disabled by
-default and remains available as an explicit fallback.
+trigger immediate coordinator refreshes; aggregate metrics and audio spectrum are opt-in
+channels that ride the same socket. The integration subscribes before its first HTTP
+reconciliation, treats resync notifications as barriers, and negotiates optional channels
+against the daemon's advertised capabilities. If the WebSocket drops, the integration
+backs off exponentially and retries forever, so HA's connectivity sensor reflects reality
+without needing per-tick polling. Periodic reconciliation is disabled by default and remains
+available as an explicit fallback.
 
 ## 🧪 Development
 
@@ -294,7 +302,9 @@ just hass-dev
 | `just fmt` | `ruff check --fix` then `ruff format` |
 | `just lint` | `ruff check` and `ruff format --check` |
 | `just typecheck` | `ty check` against the integration |
-| `just test` | full pytest suite |
+| `just test` | full pytest suite with the coverage gate |
+| `just e2e` | full integration lifecycle against the fake daemon |
+| `just e2e-real` | smoke test against a running real daemon |
 | `just metadata` | manifest, hacs.json, services.yaml, strings.json checks |
 | `just hass-check` | Home Assistant config validation against the throwaway config |
 | `just verify` | the whole pipeline: lint → typecheck → test → metadata → build |
@@ -311,9 +321,11 @@ ruff and ty run on every commit.
 ### Tests
 
 Unit tests live under `tests/` and use `pytest-homeassistant-custom-component` to bring up
-a real HA instance per test. The end-to-end suite (`tests/test_hass_e2e.py`) exercises
-the full integration lifecycle against a mock daemon. Pass `HYPERCOLOR_HASS_REAL_E2E=1`
-and run `just e2e-real` to point it at a real daemon.
+a real HA instance per test. The end-to-end scenarios in
+`tests/test_hass_control_surface.py` and `tests/test_hass_entity_lifecycle.py` exercise
+the full integration lifecycle against a fake daemon. Pass
+`HYPERCOLOR_HASS_REAL_E2E=1` and run `just e2e-real` to point the explicit smoke test at
+a real daemon.
 
 ## 💜 Contributing
 
@@ -322,7 +334,7 @@ PRs welcome. The bar is:
 1. `just verify` is green
 2. Tests cover anything you added or changed
 3. Conventional commits (`feat(hass):`, `fix(hass):`, etc.)
-4. No `SyncHypercolorClient` import — the integration is async only
+4. No `SyncHypercolorClient` import because the integration is async only
 
 For larger ideas, open an issue first so we can sketch the shape before you write the
 code. Driver work, spatial topology, and effect authoring all live upstream in
@@ -330,9 +342,9 @@ code. Driver work, spatial topology, and effect authoring all live upstream in
 
 ## 🌙 Related
 
-- 💜 [Hypercolor](https://github.com/hyperb1iss/hypercolor) — the engine and daemon
-- 🌌 [SignalRGB Home Assistant](https://github.com/hyperb1iss/signalrgb-homeassistant) — sister integration for SignalRGB on Windows
-- 🪄 [hyper-light-card](https://github.com/hyperb1iss/hyper-light-card) — companion Lovelace card for this integration
+- 💜 [Hypercolor](https://github.com/hyperb1iss/hypercolor), the engine and daemon
+- 🌌 [SignalRGB Home Assistant](https://github.com/hyperb1iss/signalrgb-homeassistant), the sister integration for SignalRGB on Windows
+- 🪄 [hyper-light-card](https://github.com/hyperb1iss/hyper-light-card), the companion Lovelace card for this integration
 
 ## 📄 License
 
