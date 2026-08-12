@@ -64,31 +64,33 @@ class ConnectionState:
             return None
         return max(errors, key=lambda item: item[0] or datetime.min.replace(tzinfo=UTC))[1]
 
-    def set_connected(self, source: ConnectionSource) -> None:
+    def set_connected(self, source: ConnectionSource) -> bool:
         state = self.sources[source]
         if state.connected:
-            return
+            return False
         state.connected = True
         state.last_connected_at = datetime.now(UTC)
         state.last_error = None
         self._notify_listeners()
+        return True
 
     def set_disconnected(
         self,
         source: ConnectionSource,
         error: BaseException | None = None,
-    ) -> None:
+    ) -> bool:
         state = self.sources[source]
         error_text = str(error) if error else None
         outage_started = state.connected or state.last_disconnected_at is None
         error_changed = state.last_error != error_text
         if not outage_started and not error_changed:
-            return
+            return False
         state.connected = False
         if outage_started:
             state.last_disconnected_at = datetime.now(UTC)
         state.last_error = error_text
         self._notify_listeners()
+        return True
 
     def is_connected(self, grace_s: int = 0) -> bool:
         if self.connected:
@@ -173,7 +175,6 @@ class HypercolorRuntimeData:
     per_device_entity_ids: set[str] = field(default_factory=set)
     ws_task: asyncio.Task[None] | None = None
     reconcile_task: asyncio.Task[None] | None = None
-    unavailable_task: asyncio.Task[None] | None = None
     refresh_tasks: set[asyncio.Task[None]] = field(default_factory=set)
 
     @property

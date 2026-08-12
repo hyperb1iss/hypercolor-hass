@@ -142,7 +142,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: HypercolorConfigEntry) 
         for task in (
             runtime.ws_task,
             runtime.reconcile_task,
-            runtime.unavailable_task,
+            runtime.coordinator.unavailable_task,
             *runtime.refresh_tasks,
         )
         if task is not None

@@ -10,10 +10,10 @@ from typing import Any, Protocol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from websockets.exceptions import InvalidStatus
 
-from hypercolor import HypercolorAuthenticationError
+from hypercolor import HypercolorAuthenticationError, HypercolorError
 from hypercolor.models import (
     ActiveEffect,
     ActiveScene,
@@ -51,36 +51,39 @@ _LOGGER = logging.getLogger(__name__)
 WS_CONNECT_TIMEOUT_S = 15
 
 _REFRESH_EVENTS = {
-    "active_scene_changed",
+    "asset_changed",
+    "audio_source_changed",
+    "audio_started",
+    "audio_stopped",
     "brightness_changed",
-    "effect_activated",
-    "effect_changed",
-    "effect_control_changed",
-    "effect_deactivated",
-    "effect_error",
-    "effect_layer_added",
-    "effect_layer_removed",
-    "effect_started",
-    "effect_stopped",
+    "capture_started",
+    "capture_stopped",
+    "config_changed",
+    "context_changed",
+    "control_surface_changed",
+    "daemon_shutdown",
+    "daemon_started",
+    "input_source_changed",
+    "library_store_changed",
     "paused",
-    "render_group_changed",
     "resumed",
     "session_changed",
-    "effect_registry_updated",
-    "layout_changed",
-    "layout_deleted",
-    "layout_saved",
-    "library_store_changed",
-    "profile_changed",
-    "profile_deleted",
-    "profile_saved",
-    "scene_library_changed",
-    "scene_settings_changed",
-    "device_connected",
-    "device_disconnected",
-    "device_discovered",
-    "device_discovery_completed",
-    "device_state_changed",
+}
+_REFRESH_EVENT_PREFIXES = (
+    "active_scene_",
+    "device_",
+    "effect_",
+    "layer_",
+    "layout_",
+    "profile_",
+    "render_group_",
+    "scene_",
+)
+_NO_REFRESH_EVENTS = {
+    "audio_level_update",
+    "beat_detected",
+    "device_metrics",
+    "frame_rendered",
 }
 
 
@@ -129,6 +132,7 @@ class HypercolorCoordinator(DataUpdateCoordinator[HypercolorSnapshot]):
         self._loader = loader
         self._connection_state = connection_state
         self.config_entry: ConfigEntry[Any] = config_entry
+        self.unavailable_task: asyncio.Task[None] | None = None
 
     async def _async_update_data(self) -> HypercolorSnapshot:
         try:
@@ -137,23 +141,56 @@ class HypercolorCoordinator(DataUpdateCoordinator[HypercolorSnapshot]):
             self._connection_state.set_disconnected(ConnectionSource.SNAPSHOT, exc)
             async_create_auth_issue(self.hass, self.config_entry.entry_id)
             raise ConfigEntryAuthFailed from exc
-        except Exception as exc:
-            self._connection_state.set_disconnected(ConnectionSource.SNAPSHOT, exc)
-            async_create_unavailable_issue(self.hass, self.config_entry.entry_id)
-            raise
+        except HypercolorError as exc:
+            self.mark_disconnected(ConnectionSource.SNAPSHOT, exc)
+            raise UpdateFailed("Failed to refresh Hypercolor snapshot") from exc
         if self.data is not None:
             data = data.with_push_telemetry(self.data)
-        self._connection_state.set_connected(ConnectionSource.SNAPSHOT)
+        self.mark_connected(ConnectionSource.SNAPSHOT)
         async_delete_auth_issue(self.hass, self.config_entry.entry_id)
-        unavailable_after_s = int(
+        return data
+
+    def mark_connected(self, source: ConnectionSource) -> None:
+        if self._connection_state.set_connected(source):
+            self._sync_unavailable_issue()
+
+    def mark_disconnected(
+        self,
+        source: ConnectionSource,
+        error: BaseException,
+    ) -> None:
+        if self._connection_state.set_disconnected(source, error):
+            self._sync_unavailable_issue()
+
+    def _sync_unavailable_issue(self) -> None:
+        if self.unavailable_task is not None:
+            self.unavailable_task.cancel()
+            self.unavailable_task = None
+        delay_s = self._connection_state.unavailable_in(self._unavailable_after_s)
+        if delay_s is None:
+            async_delete_unavailable_issue(self.hass, self.config_entry.entry_id)
+        elif delay_s <= 0:
+            async_create_unavailable_issue(self.hass, self.config_entry.entry_id)
+        else:
+            self.unavailable_task = self.hass.async_create_task(
+                self._create_unavailable_issue_after(delay_s),
+            )
+
+    async def _create_unavailable_issue_after(self, delay_s: float) -> None:
+        await asyncio.sleep(delay_s)
+        self.unavailable_task = None
+        if self._connection_state.is_available(self._unavailable_after_s):
+            return
+        async_create_unavailable_issue(self.hass, self.config_entry.entry_id)
+
+    @property
+    def _unavailable_after_s(self) -> int:
+        return int(
             self.config_entry.options.get(
                 CONF_UNAVAILABLE_AFTER_S,
                 OPTIONS_DEFAULTS[CONF_UNAVAILABLE_AFTER_S],
             )
         )
-        if self._connection_state.is_available(unavailable_after_s):
-            async_delete_unavailable_issue(self.hass, self.config_entry.entry_id)
-        return data
 
 
 async def reconcile_loop(coordinator: HypercolorCoordinator, interval_s: int) -> None:
@@ -275,7 +312,7 @@ async def websocket_loop(runtime: HypercolorRuntimeData, options: dict[str, Any]
             raise
         except Exception as exc:  # noqa: BLE001
             error = _normalize_websocket_error(exc)
-            _mark_disconnected(runtime, options, error)
+            _mark_disconnected(runtime, error)
             if isinstance(error, HypercolorAuthenticationError):
                 entry = runtime.coordinator.config_entry
                 async_create_auth_issue(runtime.coordinator.hass, entry.entry_id)
@@ -352,7 +389,10 @@ def _handle_ws_message(
 
 
 def event_requires_refresh(event: str) -> bool:
-    return event in _REFRESH_EVENTS
+    return event not in _NO_REFRESH_EVENTS and (
+        event in _REFRESH_EVENTS
+        or any(event.startswith(prefix) for prefix in _REFRESH_EVENT_PREFIXES)
+    )
 
 
 def _request_refresh(runtime: HypercolorRuntimeData) -> None:
@@ -371,44 +411,14 @@ def _normalize_metrics(data: Any) -> dict[str, Any]:
 
 
 def _mark_connected(runtime: HypercolorRuntimeData) -> None:
-    runtime.connection_state.set_connected(ConnectionSource.WEBSOCKET)
-    if runtime.unavailable_task is not None:
-        runtime.unavailable_task.cancel()
-        runtime.unavailable_task = None
-    entry = runtime.coordinator.config_entry
-    unavailable_after_s = int(
-        entry.options.get(
-            CONF_UNAVAILABLE_AFTER_S,
-            OPTIONS_DEFAULTS[CONF_UNAVAILABLE_AFTER_S],
-        )
-    )
-    if runtime.connection_state.is_available(unavailable_after_s):
-        async_delete_unavailable_issue(runtime.coordinator.hass, entry.entry_id)
+    runtime.coordinator.mark_connected(ConnectionSource.WEBSOCKET)
 
 
 def _mark_disconnected(
     runtime: HypercolorRuntimeData,
-    options: dict[str, Any],
     error: BaseException,
 ) -> None:
-    runtime.connection_state.set_disconnected(ConnectionSource.WEBSOCKET, error)
-    if runtime.unavailable_task is not None:
-        return
-    unavailable_after_s = int(options.get("unavailable_after_s", 30))
-    runtime.unavailable_task = runtime.coordinator.hass.async_create_task(
-        _mark_unavailable_after(runtime, unavailable_after_s)
-    )
-
-
-async def _mark_unavailable_after(
-    runtime: HypercolorRuntimeData,
-    delay_s: int,
-) -> None:
-    await asyncio.sleep(delay_s)
-    if runtime.connection_state.is_source_connected(ConnectionSource.WEBSOCKET):
-        return
-    entry = runtime.coordinator.config_entry
-    async_create_unavailable_issue(runtime.coordinator.hass, entry.entry_id)
+    runtime.coordinator.mark_disconnected(ConnectionSource.WEBSOCKET, error)
 
 
 async def _empty_audio() -> AudioDevices | None:

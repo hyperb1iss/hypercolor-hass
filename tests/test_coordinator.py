@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
+import pytest
+from homeassistant.helpers.update_coordinator import UpdateFailed
 from hypercolor.models.system import RenderLoopStatus
 from hypercolor.websocket import EventMessage, MetricsMessage, SpectrumData
 from websockets.datastructures import Headers
@@ -12,6 +14,7 @@ from websockets.http11 import Response
 
 from custom_components.hypercolor import coordinator as coordinator_module
 from custom_components.hypercolor.coordinator import (
+    HypercolorCoordinator,
     _mark_disconnected,
     _normalize_websocket_error,
     _process_ws_message,
@@ -26,7 +29,7 @@ from custom_components.hypercolor.runtime_data import (
     ConnectionSource,
     ConnectionState,
 )
-from hypercolor import HypercolorAuthenticationError
+from hypercolor import HypercolorAuthenticationError, HypercolorConnectionError
 from hypercolor.models import (
     ActiveEffect,
     ActiveScene,
@@ -144,12 +147,29 @@ async def test_rest_refresh_preserves_websocket_telemetry() -> None:
     assert refreshed.audio.beat_until == 42.0
 
 
-def test_event_refresh_filter_is_exact() -> None:
-    assert event_requires_refresh("effect_started") is True
-    assert event_requires_refresh("effect_registry_updated") is True
-    assert event_requires_refresh("device_connected") is True
-    assert event_requires_refresh("device_metrics") is False
-    assert event_requires_refresh("device_future_unknown") is False
+def test_event_refresh_filter_covers_state_bearing_daemon_taxonomy() -> None:
+    for event in (
+        "device_error",
+        "effect_degraded",
+        "control_surface_changed",
+        "scene_enabled",
+        "layer_stack_changed",
+        "audio_source_changed",
+        "profile_loaded",
+        "asset_changed",
+        "layout_updated",
+        "config_changed",
+    ):
+        assert event_requires_refresh(event) is True
+
+    for event in (
+        "audio_level_update",
+        "beat_detected",
+        "device_metrics",
+        "frame_rendered",
+        "future_unknown",
+    ):
+        assert event_requires_refresh(event) is False
 
 
 def test_websocket_channels_intersect_daemon_capabilities() -> None:
@@ -203,21 +223,93 @@ async def test_websocket_disconnect_creates_unavailable_issue_after_threshold(
         "async_create_unavailable_issue",
         lambda _hass, entry_id: created_issues.append(entry_id),
     )
+    monkeypatch.setattr(
+        coordinator_module,
+        "async_delete_unavailable_issue",
+        lambda _hass, _entry_id: None,
+    )
     state = ConnectionState()
     state.set_connected(ConnectionSource.SNAPSHOT)
     state.set_connected(ConnectionSource.WEBSOCKET)
-    coordinator = _UnavailableCoordinator()
-    runtime: Any = SimpleNamespace(
-        connection_state=state,
-        coordinator=coordinator,
-        unavailable_task=None,
-    )
+    coordinator = _repair_coordinator(state, unavailable_after_s=0)
+    runtime: Any = SimpleNamespace(connection_state=state, coordinator=coordinator)
 
-    _mark_disconnected(runtime, {"unavailable_after_s": 0}, ConnectionError("offline"))
-    await runtime.unavailable_task
+    _mark_disconnected(runtime, ConnectionError("offline"))
 
     assert state.is_available(0) is False
     assert created_issues == ["entry-1"]
+
+
+async def test_sdk_failure_waits_for_shared_unavailable_deadline(monkeypatch) -> None:
+    created_issues: list[str] = []
+    monkeypatch.setattr(
+        coordinator_module,
+        "async_create_unavailable_issue",
+        lambda _hass, entry_id: created_issues.append(entry_id),
+    )
+    monkeypatch.setattr(
+        coordinator_module,
+        "async_delete_unavailable_issue",
+        lambda _hass, _entry_id: None,
+    )
+    state = ConnectionState()
+    state.set_connected(ConnectionSource.SNAPSHOT)
+    coordinator = _repair_coordinator(state, unavailable_after_s=30)
+
+    async def fail(_previous: HypercolorSnapshot | None) -> HypercolorSnapshot:
+        raise HypercolorConnectionError("offline")
+
+    coordinator._loader = fail
+    cast(Any, coordinator).data = None
+
+    with pytest.raises(UpdateFailed, match="Failed to refresh Hypercolor snapshot"):
+        await coordinator._async_update_data()
+
+    assert state.is_available(30) is True
+    assert created_issues == []
+    assert coordinator.unavailable_task is not None
+
+    unavailable_task = coordinator.unavailable_task
+    coordinator.mark_connected(ConnectionSource.SNAPSHOT)
+    await asyncio.gather(unavailable_task, return_exceptions=True)
+
+    assert coordinator.unavailable_task is None
+    assert created_issues == []
+
+
+async def test_unexpected_loader_bug_does_not_poison_connection_health() -> None:
+    state = ConnectionState()
+    state.set_connected(ConnectionSource.SNAPSHOT)
+    coordinator = _repair_coordinator(state, unavailable_after_s=30)
+
+    async def fail(_previous: HypercolorSnapshot | None) -> HypercolorSnapshot:
+        raise TypeError("integration bug")
+
+    coordinator._loader = fail
+    cast(Any, coordinator).data = None
+
+    with pytest.raises(TypeError, match="integration bug"):
+        await coordinator._async_update_data()
+
+    assert state.is_source_connected(ConnectionSource.SNAPSHOT) is True
+    assert coordinator.unavailable_task is None
+
+
+def test_healthy_push_does_not_resync_repair_registry(monkeypatch) -> None:
+    deleted_issues: list[str] = []
+    monkeypatch.setattr(
+        coordinator_module,
+        "async_delete_unavailable_issue",
+        lambda _hass, entry_id: deleted_issues.append(entry_id),
+    )
+    state = ConnectionState()
+    state.set_connected(ConnectionSource.SNAPSHOT)
+    coordinator = _repair_coordinator(state, unavailable_after_s=30)
+
+    coordinator.mark_connected(ConnectionSource.WEBSOCKET)
+    coordinator.mark_connected(ConnectionSource.WEBSOCKET)
+
+    assert deleted_issues == ["entry-1"]
 
 
 async def test_websocket_messages_preserve_typed_push_telemetry(
@@ -359,12 +451,6 @@ class SnapshotClientFixture:
         return value
 
 
-class _UnavailableCoordinator:
-    def __init__(self) -> None:
-        self.hass = SimpleNamespace(async_create_task=asyncio.create_task)
-        self.config_entry = SimpleNamespace(entry_id="entry-1", options={})
-
-
 class _PushCoordinator:
     def __init__(self, data: HypercolorSnapshot) -> None:
         self.data = data
@@ -372,6 +458,7 @@ class _PushCoordinator:
         self.config_entry = SimpleNamespace(entry_id="entry-1", options={})
         self.refreshed = asyncio.Event()
         self.refreshes = 0
+        self.connection_state = ConnectionState()
 
     def async_set_updated_data(self, data: HypercolorSnapshot) -> None:
         self.data = data
@@ -380,17 +467,35 @@ class _PushCoordinator:
         self.refreshes += 1
         self.refreshed.set()
 
+    def mark_connected(self, source: ConnectionSource) -> None:
+        self.connection_state.set_connected(source)
+
 
 class _PushRuntime:
     def __init__(self, coordinator: _PushCoordinator) -> None:
         self.coordinator = coordinator
-        self.connection_state = ConnectionState()
-        self.unavailable_task = None
+        self.connection_state = coordinator.connection_state
         self.refresh_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def snapshot(self) -> HypercolorSnapshot:
         return self.coordinator.data
+
+
+def _repair_coordinator(
+    state: ConnectionState,
+    *,
+    unavailable_after_s: int,
+) -> HypercolorCoordinator:
+    coordinator = object.__new__(HypercolorCoordinator)
+    coordinator.hass = SimpleNamespace(async_create_task=asyncio.create_task)
+    coordinator.config_entry = SimpleNamespace(
+        entry_id="entry-1",
+        options={"unavailable_after_s": unavailable_after_s},
+    )
+    coordinator._connection_state = state
+    coordinator.unavailable_task = None
+    return coordinator
 
 
 def _status() -> SystemState:
