@@ -126,6 +126,7 @@ async def load_catalog(client: Any) -> dict[str, Any]:
         "scenes": await client.get_scenes(),
         "profiles": await client.get_profiles(),
         "layouts": await client.get_layouts(),
+        "preset_effect_id": str(active_effect_id) if active_effect_id else None,
         "presets": (
             await client.get_effect_presets(str(active_effect_id)) if active_effect_id else []
         ),

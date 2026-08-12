@@ -141,6 +141,10 @@ class HypercolorPresetSelect(CoordinatorEntity, SelectEntity):
 
     @property
     def _items(self) -> list[Any]:
+        catalog_effect_id = read_field(self.coordinator.data, "preset_effect_id")
+        active_effect_id = read_field(self._state.data, "active_effect_id")
+        if not catalog_effect_id or str(catalog_effect_id) != str(active_effect_id):
+            return []
         return catalog_items(self.coordinator.data, "presets")
 
 

@@ -97,6 +97,7 @@ async def test_load_catalog_gathers_home_assistant_picker_lists() -> None:
         "scenes": ["scene"],
         "profiles": ["profile"],
         "layouts": ["layout"],
+        "preset_effect_id": "aurora",
         "presets": ["preset"],
     }
 
@@ -112,6 +113,7 @@ async def test_load_catalog_has_empty_preset_stack_without_active_effect() -> No
 
     catalog = await load_catalog(client)
 
+    assert catalog["preset_effect_id"] is None
     assert catalog["presets"] == []
 
 
