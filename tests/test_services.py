@@ -6,12 +6,14 @@ from typing import Any
 import pytest
 import voluptuous as vol
 from homeassistant.const import CONF_NAME
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
 from custom_components.hypercolor.const import DOMAIN
 from custom_components.hypercolor.services import (
     CONF_CONFIG_ENTRY_ID,
     _apply_effect,
+    _apply_preset,
     _list_presets,
     _list_zones,
     _save_preset,
@@ -32,11 +34,32 @@ def test_service_schema_requires_mutation_fields() -> None:
 
 async def test_apply_effect_can_route_to_preset() -> None:
     client = _FakeClient()
-    call = _call(client, {"preset_id": "preset-1"})
+    call = _call(client, {"effect_id": "aurora", "preset_id": "preset-1"})
 
     await _apply_effect(call)
 
-    assert client.calls == [("apply_preset", ("preset-1",), {"render_group": None})]
+    assert client.calls == [
+        ("apply_effect_preset", ("aurora", "preset-1"), {"render_group": None})
+    ]
+
+
+async def test_apply_effect_rejects_unscoped_preset() -> None:
+    client = _FakeClient()
+    call = _call(client, {"preset_id": "preset-1"})
+
+    with pytest.raises(HomeAssistantError, match="effect_id is required"):
+        await _apply_effect(call)
+
+    assert client.calls == []
+
+
+async def test_apply_preset_uses_effect_scoped_stack() -> None:
+    client = _FakeClient()
+    call = _call(client, {"effect_id": "aurora", "preset_id": "preset-1"})
+
+    await _apply_preset(call)
+
+    assert client.calls == [("apply_effect_preset", ("aurora", "preset-1"), {})]
 
 
 async def test_apply_effect_targets_zone() -> None:
@@ -130,9 +153,24 @@ async def test_list_presets_filters_by_effect_id() -> None:
 
     assert result == {
         "presets": [
-            {"id": "preset-1", "effect_id": "aurora"},
+            {
+                "id": "preset-1",
+                "effect_id": "aurora",
+                "origin": "bundled",
+                "editable": False,
+            },
         ]
     }
+    assert client.calls == [("get_effect_presets", ("aurora",), {})]
+
+
+async def test_list_presets_defaults_to_active_effect() -> None:
+    client = _FakeClient()
+    call = _call(client, {})
+
+    await _list_presets(call)
+
+    assert client.calls == [("get_effect_presets", ("aurora",), {})]
 
 
 async def test_upload_effect_accepts_inline_html() -> None:
@@ -154,17 +192,22 @@ class _FakeClient:
     async def apply_effect(self, *args: Any, **kwargs: Any) -> None:
         self.calls.append(("apply_effect", args, kwargs))
 
-    async def apply_preset(self, *args: Any, **kwargs: Any) -> None:
-        self.calls.append(("apply_preset", args, kwargs))
+    async def apply_effect_preset(self, *args: Any, **kwargs: Any) -> None:
+        self.calls.append(("apply_effect_preset", args, kwargs))
 
     async def save_preset(self, *args: Any, **kwargs: Any) -> dict[str, str]:
         self.calls.append(("save_preset", args, kwargs))
         return {"id": "preset-1", "effect_id": "aurora"}
 
-    async def get_presets(self) -> list[dict[str, str]]:
+    async def get_effect_presets(self, effect_id: str) -> list[dict[str, Any]]:
+        self.calls.append(("get_effect_presets", (effect_id,), {}))
         return [
-            {"id": "preset-1", "effect_id": "aurora"},
-            {"id": "preset-2", "effect_id": "rainbow"},
+            {
+                "id": "preset-1",
+                "effect_id": effect_id,
+                "origin": "bundled",
+                "editable": False,
+            }
         ]
 
     async def upload_effect(self, *args: Any, **kwargs: Any) -> dict[str, str]:

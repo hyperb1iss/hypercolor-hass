@@ -119,12 +119,17 @@ async def load_state(client: Any) -> dict[str, Any]:
 
 
 async def load_catalog(client: Any) -> dict[str, Any]:
+    active_effect = await _optional(client.get_active_effect)
+    active_effect_id = read_field(active_effect, "id")
     return {
         "effects": await client.get_effects(),
         "scenes": await client.get_scenes(),
         "profiles": await client.get_profiles(),
         "layouts": await client.get_layouts(),
-        "presets": await client.get_presets(),
+        "preset_effect_id": str(active_effect_id) if active_effect_id else None,
+        "presets": (
+            await client.get_effect_presets(str(active_effect_id)) if active_effect_id else []
+        ),
     }
 
 
