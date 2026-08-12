@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -21,6 +22,27 @@ from scripts.release import (
 )
 
 HEAD = "a" * 40
+
+
+def test_composite_action_keeps_git_auth_header_on_one_line() -> None:
+    action = Path(".github/actions/setup-hypercolor/action.yml").read_text(encoding="utf-8")
+    assert "base64 | tr -d '\\n'" in action
+
+    environment = {**os.environ, "HYPERCOLOR_TOKEN": "github_pat_" + "x" * 96}
+    encoded = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            "printf 'x-access-token:%s' \"${HYPERCOLOR_TOKEN}\" | base64 | tr -d '\\n'",
+        ],
+        check=True,
+        capture_output=True,
+        env=environment,
+        text=True,
+    ).stdout
+
+    assert encoded
+    assert "\n" not in encoded
 
 
 def _request(

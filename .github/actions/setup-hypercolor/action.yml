@@ -44,7 +44,7 @@ runs:
         git init -q ../hypercolor
         git -C ../hypercolor remote add origin https://github.com/hyperb1iss/hypercolor.git
         if [[ -n "${HYPERCOLOR_TOKEN}" ]]; then
-          auth="$(printf 'x-access-token:%s' "${HYPERCOLOR_TOKEN}" | base64)"
+          auth="$(printf 'x-access-token:%s' "${HYPERCOLOR_TOKEN}" | base64 | tr -d '\n')"
           git -C ../hypercolor \
             -c "http.extraheader=AUTHORIZATION: basic ${auth}" \
             fetch --depth 1 origin "${HYPERCOLOR_REF}"
