@@ -1047,7 +1047,7 @@ wheels = [
 
 [[package]]
 name = "hypercolor"
-version = "0.3.2"
+version = "0.3.1"
 source = { editable = "../hypercolor/python" }
 dependencies = [
     { name = "attrs" },
@@ -1121,7 +1121,7 @@ types = [
 
 [package.metadata]
 requires-dist = [
-    { name = "hypercolor", specifier = ">=0.3.2,<0.4.0", editable = "../hypercolor/python" },
+    { name = "hypercolor", specifier = ">=0.3.1,<0.4.0", editable = "../hypercolor/python" },
 ]
 
 [package.metadata.requires-dev]
