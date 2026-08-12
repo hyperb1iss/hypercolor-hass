@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Never
 
 import httpx
 
-from .const import CONF_API_KEY
+from hypercolor import (
+    HypercolorApiError,
+    HypercolorAuthenticationError,
+    HypercolorClient,
+    HypercolorError,
+    HypercolorNotFoundError,
+)
 
 
 class CannotConnectError(Exception):
@@ -52,45 +58,38 @@ async def async_validate_daemon(
     except (KeyError, TypeError, ValueError) as exc:
         raise CannotConnectError from exc
 
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    client = HypercolorClient(
+        host=host,
+        port=port,
+        api_key=api_key,
+        httpx_client=httpx_client,
+    )
     try:
-        output_probe = await httpx_client.get(
-            f"{root_url}/api/v1/output/power",
-            headers=headers,
-        )
-    except httpx.HTTPError as exc:
-        raise CannotConnectError from exc
-    if output_probe.status_code in {httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN}:
-        raise InvalidAuthError
-    if output_probe.status_code == httpx.codes.NOT_FOUND:
-        raise UnsupportedDaemonError
-    if output_probe.status_code >= httpx.codes.BAD_REQUEST:
-        raise CannotConnectError
+        await client.get_output_power()
+    except (HypercolorError, httpx.HTTPError, TypeError, ValueError) as exc:
+        _raise_client_validation_error(exc, unsupported_not_found=True)
 
     if server_info.auth_required:
         try:
-            control_probe = await httpx_client.post(
-                f"{root_url}/api/v1/diagnose",
-                headers=headers,
-                json={"checks": []},
-            )
-        except httpx.HTTPError as exc:
-            raise CannotConnectError from exc
-
-        if control_probe.status_code in {
-            httpx.codes.UNAUTHORIZED,
-            httpx.codes.FORBIDDEN,
-        }:
-            raise InvalidAuthError
-        if control_probe.status_code >= httpx.codes.BAD_REQUEST:
-            raise CannotConnectError
+            await client.run_diagnostics(checks=[])
+        except (HypercolorError, httpx.HTTPError, TypeError, ValueError) as exc:
+            _raise_client_validation_error(exc)
 
     return server_info
 
 
-def auth_headers(entry_data: dict[str, Any]) -> dict[str, str]:
-    api_key = entry_data.get(CONF_API_KEY)
-    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+def _raise_client_validation_error(
+    error: Exception,
+    *,
+    unsupported_not_found: bool = False,
+) -> Never:
+    if isinstance(error, HypercolorAuthenticationError) or (
+        isinstance(error, HypercolorApiError) and error.status_code == httpx.codes.FORBIDDEN
+    ):
+        raise InvalidAuthError from error
+    if unsupported_not_found and isinstance(error, HypercolorNotFoundError):
+        raise UnsupportedDaemonError from error
+    raise CannotConnectError from error
 
 
 def _server_payload(payload: Any) -> dict[str, Any]:

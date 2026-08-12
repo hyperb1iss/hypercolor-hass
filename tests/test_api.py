@@ -110,7 +110,9 @@ async def test_validate_daemon_uses_non_mutating_control_probe() -> None:
                     }
                 },
             )
-        return httpx.Response(200, json={"data": {}})
+        if request.url.path == "/api/v1/output/power":
+            return httpx.Response(200, json={"data": {"state": "running"}})
+        return httpx.Response(200, json={"data": {"checks": {}}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         server = await async_validate_daemon(
