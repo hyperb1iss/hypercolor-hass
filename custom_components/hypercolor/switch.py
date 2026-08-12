@@ -8,8 +8,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_CHANNELS_AUDIO, CONF_PER_DEVICE_ENTITIES, OPTIONS_DEFAULTS
-from .entity import child_device_info, hub_device_info, read_field
+from .const import CONF_CHANNELS_AUDIO
+from .entity import add_configured_device_entities, child_device_info, hub_device_info, read_field
 from .runtime_data import HypercolorRuntimeData
 
 _AUDIO_DEVICE_DEFAULT = "default"
@@ -24,19 +24,8 @@ async def async_setup_entry(
     entities: list[SwitchEntity] = []
     if entry.options.get(CONF_CHANNELS_AUDIO, False):
         entities.append(HypercolorAudioReactiveSwitch(entry))
-    enabled_devices = set(
-        entry.options.get(
-            CONF_PER_DEVICE_ENTITIES,
-            OPTIONS_DEFAULTS[CONF_PER_DEVICE_ENTITIES],
-        )
-    )
-    devices = entry.runtime_data.coordinators["devices"].data or []
-    entities.extend(
-        HypercolorDeviceEnabledSwitch(entry, device)
-        for device in devices
-        if str(read_field(device, "id")) in enabled_devices
-    )
     async_add_entities(entities)
+    add_configured_device_entities(entry, async_add_entities, HypercolorDeviceEnabledSwitch)
 
 
 class HypercolorAudioReactiveSwitch(CoordinatorEntity, SwitchEntity):

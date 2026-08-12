@@ -6,6 +6,7 @@ import pytest
 from custom_components.hypercolor.api import (
     CannotConnectError,
     InvalidAuthError,
+    UnsupportedDaemonError,
     _normalize_server_info,
     async_validate_daemon,
 )
@@ -76,8 +77,6 @@ async def test_validate_daemon_rejects_read_only_api_key() -> None:
                     }
                 },
             )
-        if request.url.path == "/api/v1/effects":
-            return httpx.Response(200, json={"data": []})
         return httpx.Response(403, json={"error": {"code": "forbidden"}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -87,4 +86,66 @@ async def test_validate_daemon_rejects_read_only_api_key() -> None:
                 host="127.0.0.1",
                 port=9420,
                 api_key="hc_ak_r_read_only",
+            )
+
+
+async def test_validate_daemon_uses_non_mutating_control_probe() -> None:
+    requests: list[tuple[str, str, bytes]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path, request.content))
+        if request.url.path == "/api/v1/server":
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "identity": {
+                            "instance_id": "srv_1",
+                            "instance_name": "Hyperia",
+                            "version": "0.1.0",
+                        },
+                        "auth_required": True,
+                    }
+                },
+            )
+        return httpx.Response(200, json={"data": {}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await async_validate_daemon(
+            client,
+            host="127.0.0.1",
+            port=9420,
+            api_key="hc_ak_control",
+        )
+
+    assert [(method, path) for method, path, _ in requests] == [
+        ("GET", "/api/v1/server"),
+        ("GET", "/api/v1/output/power"),
+        ("POST", "/api/v1/diagnose"),
+    ]
+    assert all(path != "/api/v1/effects/current/controls" for _, path, _ in requests)
+
+
+async def test_validate_daemon_rejects_missing_output_power_contract() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/server":
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "instance_id": "srv_1",
+                        "instance_name": "Hyperia",
+                        "version": "0.3.1",
+                    }
+                },
+            )
+        return httpx.Response(404, json={"error": {"code": "not_found"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(UnsupportedDaemonError):
+            await async_validate_daemon(
+                client,
+                host="127.0.0.1",
+                port=9420,
+                api_key=None,
             )

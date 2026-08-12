@@ -14,7 +14,14 @@ from .const import (
     CONF_CHANNELS_AUDIO,
     DEFAULT_AUDIO_BEAT_HOLD_MS,
 )
-from .entity import catalog_items, hub_device_info, item_id, item_name, read_field
+from .entity import (
+    MultiCoordinatorEntity,
+    catalog_items,
+    hub_device_info,
+    item_id,
+    item_name,
+    read_field,
+)
 from .runtime_data import HypercolorRuntimeData
 
 
@@ -44,6 +51,41 @@ class HypercolorConnectedBinarySensor(BinarySensorEntity):
         self._entry = entry
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:connected"
+        self._remove_timer: CALLBACK_TYPE | None = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(self._cancel_timer)
+        self.async_on_remove(
+            self._entry.runtime_data.connection_state.async_add_listener(
+                self._handle_connection_update
+            )
+        )
+        self._handle_connection_update()
+
+    @callback
+    def _handle_connection_update(self) -> None:
+        self._cancel_timer()
+        if not self._entry.runtime_data.connection_state.connected:
+            grace_s = int(self._entry.options.get("disconnect_grace_s", 5))
+            if grace_s > 0:
+                self._remove_timer = async_call_later(
+                    self.hass,
+                    grace_s,
+                    self._disconnect_grace_expired,
+                )
+        self.async_write_ha_state()
+
+    @callback
+    def _disconnect_grace_expired(self, *_: object) -> None:
+        self._remove_timer = None
+        self.async_write_ha_state()
+
+    @callback
+    def _cancel_timer(self) -> None:
+        if self._remove_timer is not None:
+            self._remove_timer()
+            self._remove_timer = None
 
     @property
     def is_on(self) -> bool:
@@ -70,6 +112,10 @@ class HypercolorAudioBeatBinarySensor(CoordinatorEntity, BinarySensorEntity):
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:audio_beat"
 
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(self._cancel_timer)
+
     @property
     def is_on(self) -> bool:
         spectrum = (self.coordinator.data or {}).get("spectrum") or {}
@@ -81,8 +127,7 @@ class HypercolorAudioBeatBinarySensor(CoordinatorEntity, BinarySensorEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         if self.is_on:
-            if self._remove_timer is not None:
-                self._remove_timer()
+            self._cancel_timer()
             hold_ms = int(
                 self._entry.options.get(
                     CONF_AUDIO_BEAT_HOLD_MS,
@@ -101,14 +146,20 @@ class HypercolorAudioBeatBinarySensor(CoordinatorEntity, BinarySensorEntity):
         self._remove_timer = None
         self.async_write_ha_state()
 
+    @callback
+    def _cancel_timer(self) -> None:
+        if self._remove_timer is not None:
+            self._remove_timer()
+            self._remove_timer = None
 
-class HypercolorAudioReactiveBinarySensor(CoordinatorEntity, BinarySensorEntity):
+
+class HypercolorAudioReactiveBinarySensor(MultiCoordinatorEntity, BinarySensorEntity):
     _attr_has_entity_name = True
     _attr_name = "Audio reactive active"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["state"])
+        super().__init__(runtime.coordinators["state"], runtime.coordinators["catalog"])
         self._catalog = runtime.coordinators["catalog"]
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:audio_reactive_active"

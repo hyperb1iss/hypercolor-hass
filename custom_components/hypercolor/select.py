@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -10,7 +11,15 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_CHANNELS_AUDIO
-from .entity import catalog_items, hub_device_info, item_id, item_name, option_map, read_field
+from .entity import (
+    MultiCoordinatorEntity,
+    catalog_items,
+    hub_device_info,
+    item_id,
+    item_name,
+    option_map,
+    read_field,
+)
 from .runtime_data import HypercolorRuntimeData
 
 
@@ -51,7 +60,7 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class HypercolorCatalogSelect(CoordinatorEntity, SelectEntity):
+class HypercolorCatalogSelect(MultiCoordinatorEntity, SelectEntity):
     _attr_has_entity_name = True
 
     def __init__(
@@ -65,7 +74,7 @@ class HypercolorCatalogSelect(CoordinatorEntity, SelectEntity):
         action: Callable[[str], Awaitable[Any]],
     ) -> None:
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["catalog"])
+        super().__init__(runtime.coordinators["catalog"], runtime.coordinators["state"])
         self._entry = entry
         self._state = runtime.coordinators["state"]
         self._key = key
@@ -77,7 +86,7 @@ class HypercolorCatalogSelect(CoordinatorEntity, SelectEntity):
 
     @property
     def options(self) -> list[str]:
-        return [item_name(item) for item in self._items]
+        return list(option_map(self._items))
 
     @property
     def current_option(self) -> str | None:
@@ -86,10 +95,14 @@ class HypercolorCatalogSelect(CoordinatorEntity, SelectEntity):
         active_id = read_field(self._state.data, self._active_key)
         if not active_id:
             return None
-        for item in self._items:
-            if item_id(item) == str(active_id):
-                return item_name(item)
-        return None
+        return next(
+            (
+                option
+                for option, identifier in option_map(self._items).items()
+                if identifier == str(active_id)
+            ),
+            None,
+        )
 
     async def async_select_option(self, option: str) -> None:
         mapping = option_map(self._items)
@@ -102,13 +115,13 @@ class HypercolorCatalogSelect(CoordinatorEntity, SelectEntity):
         return catalog_items(self.coordinator.data, self._key)
 
 
-class HypercolorPresetSelect(CoordinatorEntity, SelectEntity):
+class HypercolorPresetSelect(MultiCoordinatorEntity, SelectEntity):
     _attr_has_entity_name = True
     _attr_name = "Preset"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["catalog"])
+        super().__init__(runtime.coordinators["catalog"], runtime.coordinators["state"])
         self._entry = entry
         self._state = runtime.coordinators["state"]
         self._attr_device_info = hub_device_info(runtime, entry.data)
@@ -128,6 +141,14 @@ class HypercolorPresetSelect(CoordinatorEntity, SelectEntity):
                 return option
         return None
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "active_preset_modified": bool(
+                read_field(self._state.data, "active_preset_modified", False)
+            )
+        }
+
     async def async_select_option(self, option: str) -> None:
         preset = _preset_option_map(self._items).get(option)
         if preset is None:
@@ -136,8 +157,10 @@ class HypercolorPresetSelect(CoordinatorEntity, SelectEntity):
             str(read_field(preset, "effect_id")),
             item_id(preset),
         )
-        await self._state.async_request_refresh()
-        await self.coordinator.async_request_refresh()
+        await asyncio.gather(
+            self._state.async_refresh(),
+            self.coordinator.async_refresh(),
+        )
 
     @property
     def _items(self) -> list[Any]:
@@ -182,15 +205,19 @@ class HypercolorAudioDeviceSelect(CoordinatorEntity, SelectEntity):
 
     @property
     def options(self) -> list[str]:
-        return [item_name(device) for device in self._devices]
+        return list(option_map(self._devices))
 
     @property
     def current_option(self) -> str | None:
         current = read_field(read_field(self.coordinator.data, "devices"), "current")
-        for device in self._devices:
-            if item_id(device) == current:
-                return item_name(device)
-        return None
+        return next(
+            (
+                option
+                for option, identifier in option_map(self._devices).items()
+                if identifier == current
+            ),
+            None,
+        )
 
     async def async_select_option(self, option: str) -> None:
         mapping = option_map(self._devices)

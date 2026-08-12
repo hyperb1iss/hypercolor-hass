@@ -33,6 +33,9 @@ def async_create_unavailable_issue(hass: HomeAssistant, entry_id: str) -> None:
     )
 
 
-def async_delete_runtime_issues(hass: HomeAssistant, entry_id: str) -> None:
+def async_delete_auth_issue(hass: HomeAssistant, entry_id: str) -> None:
     ir.async_delete_issue(hass, DOMAIN, f"{ISSUE_AUTH_INVALID}_{entry_id}")
+
+
+def async_delete_unavailable_issue(hass: HomeAssistant, entry_id: str) -> None:
     ir.async_delete_issue(hass, DOMAIN, f"{ISSUE_DAEMON_UNAVAILABLE}_{entry_id}")

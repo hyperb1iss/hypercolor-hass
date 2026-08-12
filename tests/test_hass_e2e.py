@@ -10,7 +10,7 @@ from aiohttp import web
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant, State
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.hypercolor.const import (
@@ -42,6 +42,7 @@ async def fake_daemon(
     app.router.add_patch("/api/v1/effects/current/controls", daemon.update_controls)
     app.router.add_put("/api/v1/settings/brightness", daemon.set_brightness)
     app.router.add_put("/api/v1/devices/{device_id}", daemon.update_device)
+    app.router.add_put("/api/v1/output/power", daemon.set_output_power)
     app.router.add_post("/api/v1/effects/stop", daemon.stop_effect)
     app.router.add_patch("/api/v1/scenes/{scene_id}/zones/{zone_id}", daemon.update_zone)
     app.router.add_route("*", "/api/v1/{tail:.*}", daemon.handle_api)
@@ -62,6 +63,13 @@ async def test_config_entry_boots_and_controls_fake_daemon(
     fake_daemon: _FakeHypercolorDaemon,
 ) -> None:
     entry = await _setup_entry(hass, port=fake_daemon.port)
+    assert entry.runtime_data.reconcile_task is None
+    device_registry = dr.async_get(hass)
+    hub = device_registry.async_get_device(identifiers={(DOMAIN, "srv_e2e")})
+    child = device_registry.async_get_device(identifiers={(DOMAIN, "srv_e2e:device:wled-studio")})
+    assert hub is not None
+    assert child is not None
+    assert child.via_device_id == hub.id
 
     master = _first_state(hass, "light", lambda state: state.attributes.get("effect") == "Rainbow")
     assert master.state == "on"
@@ -111,6 +119,12 @@ async def test_config_entry_boots_and_controls_fake_daemon(
         "effect_id": "solid_color",
         "controls": {},
     }
+    preset_select = _first_state(
+        hass,
+        "select",
+        lambda state: state.entity_id.endswith("_preset"),
+    )
+    assert preset_select.attributes["options"] == []
 
     await hass.services.async_call(
         DOMAIN,
@@ -214,13 +228,39 @@ async def test_stale_zone_entities_are_pruned_at_setup(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_master_turn_on_resumes_last_effect(
+async def test_offline_opted_out_device_entities_are_pruned_at_setup(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    fake_daemon: _FakeHypercolorDaemon,
+) -> None:
+    entry = await _setup_entry(hass, port=fake_daemon.port, setup=False)
+    entity_registry = er.async_get(hass)
+    stale = [
+        entity_registry.async_get_or_create(
+            domain,
+            DOMAIN,
+            f"srv_e2e:device:corsair-offline:{suffix}",
+            config_entry=entry,
+        )
+        for domain, suffix in (
+            ("light", "light"),
+            ("button", "identify"),
+            ("switch", "enabled"),
+        )
+    ]
+
+    await _activate_entry(hass, entry)
+
+    assert all(entity_registry.async_get(item.entity_id) is None for item in stale)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_master_pause_resume_preserves_exact_effect_state(
     hass: HomeAssistant,
     enable_custom_integrations: None,
     fake_daemon: _FakeHypercolorDaemon,
 ) -> None:
     entry = await _setup_entry(hass, port=fake_daemon.port)
-    state_coordinator = entry.runtime_data.coordinators["state"]
     master = _first_state(hass, "light", lambda state: "active_effect_id" in state.attributes)
     assert master.state == "on"
     assert master.attributes["effect"] == "Rainbow"
@@ -228,7 +268,6 @@ async def test_master_turn_on_resumes_last_effect(
     await hass.services.async_call(
         "light", "turn_off", {"entity_id": master.entity_id}, blocking=True
     )
-    await state_coordinator.async_refresh()
     stopped = hass.states.get(master.entity_id)
     assert stopped is not None
     assert stopped.state == "off"
@@ -236,15 +275,12 @@ async def test_master_turn_on_resumes_last_effect(
     await hass.services.async_call(
         "light", "turn_on", {"entity_id": master.entity_id}, blocking=True
     )
-    await state_coordinator.async_refresh()
-
-    # A plain turn-on must resume the effect AND the preset it was running with
-    # before turn-off, not just the bare effect.
-    assert {
-        "effect_id": "rainbow",
-        "controls": {"speed": 60},
-        "preset_id": "preset-rainbow",
-    } in fake_daemon.applied_effects
+    assert fake_daemon.pause_requests == 1
+    assert fake_daemon.resume_requests == 1
+    assert fake_daemon.active_effect_id == "rainbow"
+    assert fake_daemon.active_preset_id == "preset-rainbow"
+    assert fake_daemon.control_values == {"speed": 60.0, "brightness": 80.0}
+    assert fake_daemon.applied_effects == []
     resumed = hass.states.get(master.entity_id)
     assert resumed is not None
     assert resumed.state == "on"
@@ -277,6 +313,10 @@ async def test_preset_select_applies_unified_effect_preset(
         "controls": {"speed": 60},
         "preset_id": "preset-rainbow",
     } in fake_daemon.applied_effects
+    selected = hass.states.get(preset_select.entity_id)
+    assert selected is not None
+    assert selected.state == "Rainbow Soft"
+    assert selected.attributes["active_preset_modified"] is False
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -300,8 +340,36 @@ async def test_master_turn_off_and_stop_button_are_idempotent(
     await hass.services.async_call(
         "button", "press", {"entity_id": stop_button.entity_id}, blocking=True
     )
+    await hass.services.async_call(
+        "button", "press", {"entity_id": stop_button.entity_id}, blocking=True
+    )
 
-    assert fake_daemon.stop_requests == 3
+    assert fake_daemon.pause_requests == 2
+    assert fake_daemon.stop_requests == 2
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_selecting_effect_while_paused_uses_effect_apply_wake(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    fake_daemon: _FakeHypercolorDaemon,
+) -> None:
+    entry = await _setup_entry(hass, port=fake_daemon.port)
+    master = _first_state(hass, "light", lambda state: "active_effect_id" in state.attributes)
+
+    await hass.services.async_call(
+        "light", "turn_off", {"entity_id": master.entity_id}, blocking=True
+    )
+    await hass.services.async_call(
+        "light",
+        "turn_on",
+        {"entity_id": master.entity_id, "effect": "Solid Color"},
+        blocking=True,
+    )
+
+    assert fake_daemon.active_effect_id == "solid_color"
+    assert fake_daemon.paused is False
+    assert fake_daemon.resume_requests == 0
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -323,7 +391,7 @@ async def _setup_entry(
         },
         options={
             **OPTIONS_DEFAULTS,
-            CONF_RECONCILE_INTERVAL_S: 3600,
+            CONF_RECONCILE_INTERVAL_S: 0,
             CONF_CHANNELS_AUDIO: False,
             CONF_CHANNELS_METRICS: False,
             CONF_LIVE_CONTROLS_ENABLED: True,
@@ -360,6 +428,7 @@ class _FakeHypercolorDaemon:
         self.port = 0
         self.active_effect_id = "rainbow"
         self.active_preset_id = "preset-rainbow"
+        self.paused = False
         self.brightness = 80
         self.control_values: dict[str, Any] = {"speed": 60.0, "brightness": 80.0}
         self.control_updates: list[dict[str, Any]] = []
@@ -367,6 +436,8 @@ class _FakeHypercolorDaemon:
         self.device_updates: list[dict[str, Any]] = []
         self.zone_updates: list[dict[str, Any]] = []
         self.stop_requests = 0
+        self.pause_requests = 0
+        self.resume_requests = 0
 
     async def websocket(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(protocols=("hypercolor-v1",))
@@ -404,6 +475,7 @@ class _FakeHypercolorDaemon:
             return self._ok(self._items(presets))
         responses = {
             "GET /server": self._server,
+            "GET /output/power": lambda: {"state": "paused" if self.paused else "running"},
             "GET /status": self._status,
             "GET /effects": lambda: self._items(self._effects()),
             "GET /effects/active": self._active_effect,
@@ -423,6 +495,8 @@ class _FakeHypercolorDaemon:
         body = await _json_body(request)
         effect_id = request.match_info["effect_id"]
         self.active_effect_id = effect_id
+        self.active_preset_id = body.get("preset_id")
+        self.paused = False
         controls = dict(body.get("controls") or {})
         self.control_values.update(controls)
         applied = {"effect_id": effect_id, "controls": controls}
@@ -491,7 +565,18 @@ class _FakeHypercolorDaemon:
                 status=404,
             )
         self.active_effect_id = ""
+        self.active_preset_id = None
+        self.paused = False
         return self._ok({"stopped": True})
+
+    async def set_output_power(self, request: web.Request) -> web.Response:
+        body = await _json_body(request)
+        self.paused = body["state"] == "paused"
+        if self.paused:
+            self.pause_requests += 1
+        else:
+            self.resume_requests += 1
+        return self._ok({"state": body["state"]})
 
     async def update_zone(self, request: web.Request) -> web.Response:
         body = await _json_body(request)
@@ -534,7 +619,11 @@ class _FakeHypercolorDaemon:
             "global_brightness": self.brightness,
             "audio_available": True,
             "capture_available": False,
-            "render_loop": {"state": "running", "fps_tier": "30fps", "total_frames": 123},
+            "render_loop": {
+                "state": "paused" if self.paused else "running",
+                "fps_tier": "30fps",
+                "total_frames": 123,
+            },
             "event_bus_subscribers": 1,
             "active_effect": self._effect_name(self.active_effect_id),
         }
@@ -571,7 +660,7 @@ class _FakeHypercolorDaemon:
         effect = {
             "id": self.active_effect_id,
             "name": self._effect_name(self.active_effect_id),
-            "state": "running",
+            "state": "paused" if self.paused else "running",
             "controls": [
                 {
                     "id": "speed",

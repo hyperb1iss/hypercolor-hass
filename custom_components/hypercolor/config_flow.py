@@ -1,21 +1,27 @@
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
-from .api import CannotConnectError, InvalidAuthError, ServerInfo, async_validate_daemon
+from .api import (
+    CannotConnectError,
+    InvalidAuthError,
+    ServerInfo,
+    UnsupportedDaemonError,
+    async_validate_daemon,
+)
 from .const import (
     CONF_API_KEY,
     CONF_AUDIO_BEAT_HOLD_MS,
     CONF_CHANNELS_AUDIO,
-    CONF_CHANNELS_DEVICE_METRICS,
     CONF_CHANNELS_METRICS,
     CONF_DISCONNECT_GRACE_S,
     CONF_LIVE_CONTROLS_ENABLED,
@@ -27,11 +33,12 @@ from .const import (
     DOMAIN,
     OPTIONS_DEFAULTS,
 )
+from .entity import read_field
 
 
 class HypercolorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
-    MINOR_VERSION = 1
+    MINOR_VERSION = 2
 
     _discovery: dict[str, Any] | None = None
 
@@ -157,6 +164,9 @@ class HypercolorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except InvalidAuthError:
             errors["base"] = "invalid_auth"
             return None
+        except UnsupportedDaemonError:
+            errors["base"] = "unsupported_daemon"
+            return None
 
         await self.async_set_unique_id(server.instance_id)
         self._abort_if_unique_id_configured()
@@ -185,6 +195,9 @@ class HypercolorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except InvalidAuthError:
             errors["base"] = "invalid_auth"
             return None
+        except UnsupportedDaemonError:
+            errors["base"] = "unsupported_daemon"
+            return None
 
         return self.async_update_reload_and_abort(
             entry,
@@ -204,6 +217,13 @@ class HypercolorOptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data={**OPTIONS_DEFAULTS, **user_input})
 
         options = {**OPTIONS_DEFAULTS, **self._config_entry.options}
+        selected_devices = options[CONF_PER_DEVICE_ENTITIES]
+        device_options = _device_options(
+            self._config_entry,
+            [str(device_id) for device_id in selected_devices]
+            if isinstance(selected_devices, list)
+            else [],
+        )
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -213,7 +233,7 @@ class HypercolorOptionsFlow(config_entries.OptionsFlow):
                         default=options[CONF_RECONCILE_INTERVAL_S],
                     ): selector.NumberSelector(
                         selector.NumberSelectorConfig(
-                            min=10,
+                            min=0,
                             max=600,
                             step=5,
                             mode=selector.NumberSelectorMode.BOX,
@@ -226,10 +246,6 @@ class HypercolorOptionsFlow(config_entries.OptionsFlow):
                     vol.Required(
                         CONF_CHANNELS_METRICS,
                         default=options[CONF_CHANNELS_METRICS],
-                    ): bool,
-                    vol.Required(
-                        CONF_CHANNELS_DEVICE_METRICS,
-                        default=options[CONF_CHANNELS_DEVICE_METRICS],
                     ): bool,
                     vol.Required(
                         CONF_LIVE_CONTROLS_ENABLED,
@@ -273,9 +289,9 @@ class HypercolorOptionsFlow(config_entries.OptionsFlow):
                         default=options[CONF_PER_DEVICE_ENTITIES],
                     ): selector.SelectSelector(
                         selector.SelectSelectorConfig(
-                            options=cast(list[str], options[CONF_PER_DEVICE_ENTITIES]),
+                            options=device_options,
                             multiple=True,
-                            custom_value=True,
+                            custom_value=False,
                         )
                     ),
                 }
@@ -290,6 +306,25 @@ async def _validate(flow: HypercolorConfigFlow, user_input: dict[str, Any]) -> S
         port=user_input[CONF_PORT],
         api_key=_api_key(user_input),
     )
+
+
+def _device_options(
+    entry: config_entries.ConfigEntry,
+    selected_ids: list[str],
+) -> list[selector.SelectOptionDict]:
+    runtime = entry.runtime_data if entry.state is ConfigEntryState.LOADED else None
+    coordinator = read_field(runtime, "coordinators", {}).get("devices") if runtime else None
+    devices = read_field(coordinator, "data", []) or []
+    labels = {
+        str(read_field(device, "id")): str(read_field(device, "name", read_field(device, "id")))
+        for device in devices
+    }
+    for device_id in selected_ids:
+        labels.setdefault(device_id, device_id)
+    return [
+        selector.SelectOptionDict(value=device_id, label=label)
+        for device_id, label in sorted(labels.items(), key=lambda item: item[1].casefold())
+    ]
 
 
 def _user_schema(user_input: dict[str, Any] | None) -> vol.Schema:

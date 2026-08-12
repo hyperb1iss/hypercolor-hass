@@ -6,7 +6,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
@@ -14,8 +14,14 @@ from homeassistant.helpers import (
 )
 from homeassistant.helpers.httpx_client import get_async_client
 
-from .api import CannotConnectError, InvalidAuthError, async_validate_daemon
-from .client import create_hypercolor_client
+from hypercolor import HypercolorClient
+
+from .api import (
+    CannotConnectError,
+    InvalidAuthError,
+    UnsupportedDaemonError,
+    async_validate_daemon,
+)
 from .const import (
     CONF_API_KEY,
     CONF_RECONCILE_INTERVAL_S,
@@ -32,7 +38,7 @@ from .coordinator import (
     reconcile_loop,
     websocket_loop,
 )
-from .entity import child_device_identifier, device_slug, read_field
+from .entity import child_device_identifier, read_field
 from .runtime_data import HypercolorRuntimeData
 from .services import async_setup_services
 
@@ -59,8 +65,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: HypercolorConfigEntry) -
         raise ConfigEntryNotReady from exc
     except InvalidAuthError as exc:
         raise ConfigEntryAuthFailed from exc
+    except UnsupportedDaemonError as exc:
+        raise ConfigEntryError(
+            "The Hypercolor daemon does not support persistent output pause"
+        ) from exc
 
-    client = create_hypercolor_client(
+    client = HypercolorClient(
         host=entry.data[CONF_HOST],
         port=entry.data[CONF_PORT],
         api_key=entry.data.get(CONF_API_KEY),
@@ -126,17 +136,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: HypercolorConfigEntry) -
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     _register_child_devices(hass, entry, devices.data)
-    _cleanup_opted_out_entities(hass, entry, devices.data)
+    _cleanup_opted_out_entities(hass, entry)
     _cleanup_stale_zone_entities(hass, entry, state.data)
 
     reconcile_interval_s = int(
         entry.options.get(CONF_RECONCILE_INTERVAL_S, OPTIONS_DEFAULTS[CONF_RECONCILE_INTERVAL_S])
     )
-    runtime_data.reconcile_task = entry.async_create_background_task(
-        hass,
-        reconcile_loop([state, catalog, devices], reconcile_interval_s),
-        name="hypercolor.reconcile",
-    )
+    if reconcile_interval_s > 0:
+        runtime_data.reconcile_task = entry.async_create_background_task(
+            hass,
+            reconcile_loop([state, catalog, devices], reconcile_interval_s),
+            name="hypercolor.reconcile",
+        )
     runtime_data.ws_task = entry.async_create_background_task(
         hass,
         websocket_loop(runtime_data, {**OPTIONS_DEFAULTS, **entry.options}),
@@ -154,13 +165,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: HypercolorConfigEntry) 
 
     runtime = entry.runtime_data
 
-    tasks = [task for task in (runtime.ws_task, runtime.reconcile_task) if task is not None]
+    tasks = [
+        task
+        for task in (runtime.ws_task, runtime.reconcile_task, runtime.unavailable_task)
+        if task is not None
+    ]
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
 
-    if hasattr(runtime.client, "aclose"):
-        await runtime.client.aclose()
+    await runtime.client.aclose()
 
     return unload_ok
 
@@ -170,11 +184,15 @@ async def _async_update_listener(hass: HomeAssistant, entry: HypercolorConfigEnt
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    if entry.version == 1 and entry.minor_version < 1:
+    if entry.version == 1 and entry.minor_version < 2:
+        options = {**OPTIONS_DEFAULTS, **entry.options}
+        if options[CONF_RECONCILE_INTERVAL_S] == 60:
+            options[CONF_RECONCILE_INTERVAL_S] = 0
+        options.pop("channels.device_metrics", None)
         hass.config_entries.async_update_entry(
             entry,
-            minor_version=1,
-            options={**OPTIONS_DEFAULTS, **entry.options},
+            minor_version=2,
+            options=options,
         )
     return True
 
@@ -204,6 +222,15 @@ def _register_child_devices(
 ) -> None:
     device_registry = dr.async_get(hass)
     runtime = entry.runtime_data
+    device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, runtime.server.instance_id)},
+        name=runtime.server.instance_name,
+        manufacturer="Hypercolor",
+        model="Daemon",
+        sw_version=runtime.server.version,
+        configuration_url=(f"http://{entry.data[CONF_HOST]}:{entry.data[CONF_PORT]}"),
+    )
     for device in devices or []:
         device_id = str(read_field(device, "id"))
         if not device_id:
@@ -222,28 +249,25 @@ def _register_child_devices(
 def _cleanup_opted_out_entities(
     hass: HomeAssistant,
     entry: HypercolorConfigEntry,
-    devices: list[Any],
 ) -> None:
     entity_registry = er.async_get(hass)
     runtime = entry.runtime_data
     opted_in = set(entry.options.get("per_device_entities", []))
-    for device in devices or []:
-        device_id = str(read_field(device, "id"))
-        if not device_id or device_id in opted_in:
+    prefix = f"{runtime.server.instance_id}:device:"
+    suffixes = (":light", ":identify", ":enabled")
+    for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
+        if not registry_entry.unique_id.startswith(prefix):
             continue
-        slug = device_slug(device_id)
-        for unique_id in (
-            f"{runtime.server.instance_id}:device:{device_id}:light",
-            f"{runtime.server.instance_id}:device:{device_id}:identify",
-            f"{runtime.server.instance_id}:device:{device_id}:enabled",
-        ):
-            if entity_id := entity_registry.async_get_entity_id(
-                _domain_for_unique_id(unique_id),
-                DOMAIN,
-                unique_id,
-            ):
-                entity_registry.async_remove(entity_id)
-        runtime.per_device_entity_ids.discard(slug)
+        suffix = next(
+            (candidate for candidate in suffixes if registry_entry.unique_id.endswith(candidate)),
+            None,
+        )
+        if suffix is None:
+            continue
+        device_id = registry_entry.unique_id[len(prefix) : -len(suffix)]
+        if device_id in opted_in:
+            continue
+        entity_registry.async_remove(registry_entry.entity_id)
 
 
 def _cleanup_stale_zone_entities(
@@ -270,11 +294,3 @@ def _cleanup_stale_zone_entities(
         zone_id = registry_entry.unique_id.removeprefix(prefix)
         if zone_id not in current_zone_ids:
             entity_registry.async_remove(registry_entry.entity_id)
-
-
-def _domain_for_unique_id(unique_id: str) -> str:
-    if unique_id.endswith(":light"):
-        return "light"
-    if unique_id.endswith(":identify"):
-        return "button"
-    return "switch"

@@ -23,7 +23,7 @@ classifiers = [
     "Private :: Do Not Upload",
 ]
 dependencies = [
-    "hypercolor>=0.3.1,<0.4.0",
+    "hypercolor>=0.3.2,<0.4.0",
 ]
 
 [dependency-groups]
