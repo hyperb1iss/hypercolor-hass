@@ -27,7 +27,8 @@
     },
     "error": {
       "cannot_connect": "Unable to connect to the Hypercolor daemon.",
-      "invalid_auth": "The API key was rejected."
+      "invalid_auth": "The API key was rejected.",
+      "unsupported_daemon": "Update the Hypercolor daemon to a version that supports persistent output pause."
     },
     "abort": {
       "already_configured": "This Hypercolor daemon is already configured.",
@@ -43,7 +44,6 @@
           "reconcile_interval_s": "Reconcile interval",
           "channels.audio": "Audio entities",
           "channels.metrics": "Metrics entities",
-          "channels.device_metrics": "Device metrics",
           "live_controls_enabled": "Live control number entities",
           "audio_beat_hold_ms": "Audio beat hold",
           "disconnect_grace_s": "Disconnect grace",

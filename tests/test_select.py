@@ -34,3 +34,19 @@ def test_preset_options_hide_stack_from_stale_effect() -> None:
     entity._state = SimpleNamespace(data={"active_effect_id": "rainbow"})
 
     assert entity.options == []
+
+
+def test_modified_preset_stays_selected_and_reports_derivation() -> None:
+    preset = SimpleNamespace(id="preset-soft", name="Soft", effect_id="aurora")
+    entity = object.__new__(HypercolorPresetSelect)
+    entity.coordinator = SimpleNamespace(data={"preset_effect_id": "aurora", "presets": [preset]})
+    entity._state = SimpleNamespace(
+        data={
+            "active_effect_id": "aurora",
+            "active_preset": "preset-soft",
+            "active_preset_modified": True,
+        }
+    )
+
+    assert entity.current_option == "Soft"
+    assert entity.extra_state_attributes == {"active_preset_modified": True}

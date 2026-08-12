@@ -20,10 +20,9 @@ async def async_setup_entry(
 ) -> None:
     entities: list[SensorEntity] = [
         HypercolorActiveEffectSensor(entry),
-        HypercolorFpsSensor(entry),
     ]
     if entry.options.get(CONF_CHANNELS_METRICS, False):
-        entities.append(HypercolorRenderTimeSensor(entry))
+        entities.extend([HypercolorFpsSensor(entry), HypercolorRenderTimeSensor(entry)])
     if entry.options.get(CONF_CHANNELS_AUDIO, False):
         entities.append(HypercolorAudioEnergySensor(entry))
     async_add_entities(entities)
@@ -53,18 +52,14 @@ class HypercolorFpsSensor(CoordinatorEntity, SensorEntity):
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["state"])
-        self._metrics = runtime.coordinators["metrics"]
+        super().__init__(runtime.coordinators["metrics"])
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:fps"
 
     @property
     def native_value(self) -> float | None:
-        metrics_value = _first_number(self._metrics.data, "fps", "render_fps")
-        if metrics_value is not None:
-            return metrics_value
-        render_loop = read_field(self.coordinator.data, "render_loop", {})
-        return _first_number(render_loop, "fps", "target_fps", "actual_fps")
+        fps = read_field(self.coordinator.data, "fps", {})
+        return _first_number(fps, "actual", "delivered", "target")
 
 
 class HypercolorRenderTimeSensor(CoordinatorEntity, SensorEntity):
@@ -81,7 +76,8 @@ class HypercolorRenderTimeSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self) -> float | None:
-        return _first_number(self.coordinator.data, "render_time_ms", "frame_time_ms")
+        frame_time = read_field(self.coordinator.data, "frame_time", {})
+        return _first_number(frame_time, "avg_ms", "p95_ms")
 
 
 class HypercolorAudioEnergySensor(CoordinatorEntity, SensorEntity):

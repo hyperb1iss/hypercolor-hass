@@ -125,7 +125,6 @@ the device tree reads naturally.
 | `light.hypercolor` | light | master power, brightness, effect picker |
 | `binary_sensor.hypercolor_connected` | binary_sensor | live connectivity to the daemon |
 | `sensor.hypercolor_active_effect` | sensor | display name of the running effect |
-| `sensor.hypercolor_fps` | sensor | render loop FPS |
 | `select.hypercolor_scene` | select | activate a scene |
 | `select.hypercolor_profile` | select | apply a profile |
 | `select.hypercolor_layout` | select | switch spatial layouts |
@@ -142,7 +141,8 @@ Toggle these in the integration's options panel:
 - 🌊 **Audio entities** (`channels.audio`) — adds `binary_sensor.hypercolor_audio_beat`,
   `binary_sensor.hypercolor_audio_reactive_active`, `sensor.hypercolor_audio_energy`,
   `select.hypercolor_audio_device`, and `switch.hypercolor_audio_reactive`.
-- 🧪 **Metrics entity** (`channels.metrics`) — adds `sensor.hypercolor_render_time`.
+- 🧪 **Metrics entities** (`channels.metrics`): adds `sensor.hypercolor_fps` and
+  `sensor.hypercolor_render_time`.
 - 🦋 **Per-device entities** (`per_device_entities`) — opt specific device ids in to get
   their own light, identify button, and enabled switch.
 
@@ -261,10 +261,11 @@ that becomes the integration's unique id. That means the same daemon keeps the s
 entry across IP changes, container restarts, and network re-shuffles.
 
 The integration also runs a background WebSocket session against the daemon. Events
-trigger immediate coordinator refreshes; metrics, device metrics, and audio spectrum are
-opt-in channels that ride the same socket. If the WebSocket drops, the integration
-backs off exponentially and retries forever, so HA's connectivity sensor reflects reality
-without needing per-tick polling.
+patch authoritative state immediately and refresh only the affected coordinator; metrics
+and audio spectrum are opt-in channels that ride the same socket. If the WebSocket drops,
+the integration backs off exponentially and retries forever, so HA's connectivity sensor
+reflects reality without needing per-tick polling. Periodic reconciliation is disabled by
+default and remains available as an explicit fallback.
 
 ## 🧪 Development
 

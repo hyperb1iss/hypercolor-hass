@@ -6,12 +6,16 @@ from typing import Any
 import pytest
 import voluptuous as vol
 from homeassistant.const import CONF_NAME
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import Context, HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from homeassistant.helpers import config_validation as cv
+from pytest_homeassistant_custom_component.common import MockUser
 
+from custom_components.hypercolor import services as services_module
 from custom_components.hypercolor.const import DOMAIN
 from custom_components.hypercolor.services import (
     CONF_CONFIG_ENTRY_ID,
+    SERVICE_APPLY_EFFECT,
     _apply_effect,
     _apply_preset,
     _list_presets,
@@ -22,6 +26,7 @@ from custom_components.hypercolor.services import (
     _set_unassigned_behavior,
     _set_zone,
     _upload_effect,
+    async_setup_services,
 )
 
 
@@ -30,6 +35,22 @@ def test_service_schema_requires_mutation_fields() -> None:
 
     with pytest.raises(vol.MultipleInvalid, match="effect_id"):
         schema({CONF_CONFIG_ENTRY_ID: "entry-1"})
+
+
+async def test_registered_services_reject_non_admin_users(
+    hass: HomeAssistant,
+    hass_read_only_user: MockUser,
+) -> None:
+    async_setup_services(hass)
+
+    with pytest.raises(Unauthorized):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_APPLY_EFFECT,
+            {CONF_CONFIG_ENTRY_ID: "entry-1", "effect_id": "aurora"},
+            blocking=True,
+            context=Context(user_id=hass_read_only_user.id),
+        )
 
 
 async def test_apply_effect_can_route_to_preset() -> None:
@@ -183,6 +204,49 @@ async def test_upload_effect_accepts_inline_html() -> None:
         ("upload_effect", ("neon.html", "<html></html>"), {}),
     ]
     assert result == {"effect": {"id": "user:neon"}}
+
+
+async def test_upload_effect_rejects_path_outside_allowed_roots(tmp_path: Any) -> None:
+    path = tmp_path / "secret.html"
+    path.write_text("<html></html>")
+    call = _call(_FakeClient(), {"path": str(path)})
+    call.hass.config = SimpleNamespace(is_allowed_path=lambda _: False)
+
+    with pytest.raises(HomeAssistantError, match="outside Home Assistant's allowed paths"):
+        await _upload_effect(call)
+
+
+async def test_upload_effect_rejects_oversized_file_before_read(tmp_path: Any) -> None:
+    path = tmp_path / "huge.html"
+    path.write_bytes(b"x" * (1024 * 1024 + 1))
+    call = _call(_FakeClient(), {"path": str(path)})
+    call.hass.config = SimpleNamespace(is_allowed_path=lambda _: True)
+
+    with pytest.raises(HomeAssistantError, match="exceeds the 1 MiB"):
+        await _upload_effect(call)
+
+
+async def test_upload_effect_rejects_path_replacement_during_open(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "effect.html"
+    outside = tmp_path / "secret.html"
+    path.write_text("<html>safe</html>")
+    outside.write_text("<html>secret</html>")
+    call = _call(_FakeClient(), {"path": str(path)})
+    call.hass.config = SimpleNamespace(is_allowed_path=lambda _: True)
+    real_open = services_module.os.open
+
+    def replace_then_open(file_path: Any, flags: int) -> int:
+        path.unlink()
+        path.symlink_to(outside)
+        return real_open(file_path, flags)
+
+    monkeypatch.setattr(services_module.os, "open", replace_then_open)
+
+    with pytest.raises(HomeAssistantError, match=r"Unable to read effect file|changed while"):
+        await _upload_effect(call)
 
 
 class _FakeClient:

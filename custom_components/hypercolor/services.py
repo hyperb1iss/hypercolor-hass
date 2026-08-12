@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
+import stat
 from collections.abc import Callable, Coroutine
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +13,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import config_validation as cv, selector
+from homeassistant.helpers import config_validation as cv, selector, service as service_helper
 
 from .const import DOMAIN
 from .runtime_data import HypercolorRuntimeData
@@ -37,6 +40,8 @@ SERVICE_IDENTIFY_DEVICE = "identify_device"
 SERVICE_SET_DISPLAY_FACE = "set_display_face"
 SERVICE_UPLOAD_EFFECT = "upload_effect"
 SERVICE_RUN_DIAGNOSTICS = "run_diagnostics"
+
+_MAX_EFFECT_SIZE_BYTES = 1024 * 1024
 
 
 def async_setup_services(hass: HomeAssistant) -> None:
@@ -252,7 +257,8 @@ def _register(
 ) -> None:
     if hass.services.has_service(DOMAIN, service):
         return
-    hass.services.async_register(
+    service_helper.async_register_admin_service(
+        hass,
         DOMAIN,
         service,
         handler,
@@ -476,14 +482,57 @@ async def _upload_effect(call: ServiceCall) -> dict[str, Any]:
     if content is None:
         if path is None:
             raise HomeAssistantError("path or html is required")
-        effect_path = Path(path)
-        content = await call.hass.async_add_executor_job(effect_path.read_bytes)
+        try:
+            effect_path = await call.hass.async_add_executor_job(
+                partial(Path(path).resolve, strict=True),
+            )
+        except OSError as exc:
+            raise HomeAssistantError(f"Unable to read effect file: {exc}") from exc
+        if not call.hass.config.is_allowed_path(str(effect_path)):
+            raise HomeAssistantError("Effect path is outside Home Assistant's allowed paths")
+        try:
+            content = await call.hass.async_add_executor_job(_read_limited_effect, effect_path)
+        except HomeAssistantError:
+            raise
+        except OSError as exc:
+            raise HomeAssistantError(f"Unable to read effect file: {exc}") from exc
         file_name = file_name or effect_path.name
+    content_size = len(content.encode()) if isinstance(content, str) else len(content)
+    if content_size > _MAX_EFFECT_SIZE_BYTES:
+        raise HomeAssistantError("Effect content exceeds the 1 MiB upload limit")
     result = await entry.runtime_data.client.upload_effect(
         file_name or "hypercolor-effect.html",
         content,
     )
     return {"effect": result}
+
+
+def _read_limited_effect(effect_path: Path) -> bytes:
+    before_open = effect_path.stat(follow_symlinks=False)
+    if not stat.S_ISREG(before_open.st_mode):
+        raise HomeAssistantError("Effect path must reference a regular file")
+    if before_open.st_size > _MAX_EFFECT_SIZE_BYTES:
+        raise HomeAssistantError("Effect file exceeds the 1 MiB upload limit")
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = os.open(effect_path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise HomeAssistantError("Effect path must reference a regular file")
+        if (opened.st_dev, opened.st_ino) != (before_open.st_dev, before_open.st_ino):
+            raise HomeAssistantError("Effect file changed while it was being opened")
+        if opened.st_size > _MAX_EFFECT_SIZE_BYTES:
+            raise HomeAssistantError("Effect file exceeds the 1 MiB upload limit")
+        with os.fdopen(descriptor, "rb", closefd=False) as effect_file:
+            return effect_file.read(_MAX_EFFECT_SIZE_BYTES + 1)
+    finally:
+        os.close(descriptor)
 
 
 async def _run_diagnostics(call: ServiceCall) -> dict[str, Any]:

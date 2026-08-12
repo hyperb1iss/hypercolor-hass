@@ -27,7 +27,8 @@
     },
     "error": {
       "cannot_connect": "Unable to connect to the Hypercolor daemon.",
-      "invalid_auth": "The API key was rejected."
+      "invalid_auth": "The API key was rejected.",
+      "unsupported_daemon": "Update the Hypercolor daemon to a version that supports persistent output pause."
     },
     "abort": {
       "already_configured": "This Hypercolor daemon is already configured.",

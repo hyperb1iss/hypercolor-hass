@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from homeassistant.components.light import (
@@ -10,15 +11,15 @@ from homeassistant.components.light import (
     LightEntityFeature,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .brightness import daemon_to_ha, ha_to_daemon
-from .client import async_stop_effect
-from .const import CONF_PER_DEVICE_ENTITIES, OPTIONS_DEFAULTS
 from .entity import (
+    MultiCoordinatorEntity,
+    add_configured_device_entities,
     catalog_items,
     child_device_info,
     control_scalar,
@@ -36,19 +37,8 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     entities: list[LightEntity] = [HypercolorMasterLight(entry)]
-    enabled_devices = set(
-        entry.options.get(
-            CONF_PER_DEVICE_ENTITIES,
-            OPTIONS_DEFAULTS[CONF_PER_DEVICE_ENTITIES],
-        )
-    )
-    devices = entry.runtime_data.coordinators["devices"].data or []
-    entities.extend(
-        HypercolorDeviceLight(entry, device)
-        for device in devices
-        if str(read_field(device, "id")) in enabled_devices
-    )
     async_add_entities(entities)
+    add_configured_device_entities(entry, async_add_entities, HypercolorDeviceLight)
 
     state = entry.runtime_data.coordinators["state"]
     known_zone_ids: set[str] = set()
@@ -70,7 +60,7 @@ async def async_setup_entry(
     entry.async_on_unload(state.async_add_listener(_sync_zone_entities))
 
 
-class HypercolorMasterLight(CoordinatorEntity, LightEntity):
+class HypercolorMasterLight(MultiCoordinatorEntity, LightEntity):
     _attr_color_mode = ColorMode.BRIGHTNESS
     _attr_has_entity_name = True
     _attr_name = None
@@ -78,32 +68,12 @@ class HypercolorMasterLight(CoordinatorEntity, LightEntity):
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["state"])
+        super().__init__(runtime.coordinators["state"], runtime.coordinators["catalog"])
         self._entry = entry
         self._catalog = runtime.coordinators["catalog"]
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_supported_color_modes = {ColorMode.BRIGHTNESS}
         self._attr_unique_id = f"{runtime.server.instance_id}:master"
-        self._last_effect_id, self._last_preset_id = self._running_effect_ref()
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        # The daemon forgets the active effect (and the preset it was applied
-        # with) when rendering stops, so keep the last running pair to resume
-        # the full look on a plain turn-on, not just the bare effect.
-        effect_id, preset_id = self._running_effect_ref()
-        if effect_id:
-            self._last_effect_id = effect_id
-            self._last_preset_id = preset_id
-        super()._handle_coordinator_update()
-
-    def _running_effect_ref(self) -> tuple[str | None, str | None]:
-        effect_id = read_field(self.coordinator.data, "active_effect_id")
-        preset_id = read_field(self.coordinator.data, "active_preset")
-        return (
-            str(effect_id) if effect_id else None,
-            str(preset_id) if preset_id else None,
-        )
 
     @property
     def brightness(self) -> int | None:
@@ -134,6 +104,8 @@ class HypercolorMasterLight(CoordinatorEntity, LightEntity):
         return {
             "active_effect": self.effect,
             "active_effect_id": active_id,
+            "active_preset_id": read_field(state, "active_preset"),
+            "active_preset_modified": bool(read_field(state, "active_preset_modified", False)),
             "active_effect_cover_image_url": cover_image_url,
             "device_count": read_field(state, "device_count"),
             # `effect_image` mirrors the SignalRGB attribute the card reads for
@@ -157,30 +129,45 @@ class HypercolorMasterLight(CoordinatorEntity, LightEntity):
 
     @property
     def is_on(self) -> bool | None:
-        return self.effect is not None
+        if self.effect is None:
+            return False
+        return read_field(self.coordinator.data, "active_effect_state") != "paused"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         client = self._entry.runtime_data.client
+        was_paused = read_field(self.coordinator.data, "active_effect_state") == "paused"
+        effect_changed = False
         if ATTR_BRIGHTNESS in kwargs:
             await client.set_brightness(ha_to_daemon(int(kwargs[ATTR_BRIGHTNESS])))
 
         effect = kwargs.get(ATTR_EFFECT)
         if effect:
             await client.apply_effect(effect_id_for_name(self._catalog.data, str(effect)))
-        elif not self.is_on and (
-            resume := self._last_effect_id or first_effect_id(self._catalog.data)
-        ):
-            preset = self._last_preset_id if resume == self._last_effect_id else None
-            if preset:
-                await client.apply_effect_preset(resume, preset)
-            else:
-                await client.apply_effect(resume)
+            effect_changed = True
+        elif was_paused:
+            result = await client.resume_rendering()
+            self._set_output_state(read_field(result, "state", "running"))
+            return
+        elif self.effect is None and (effect_id := first_effect_id(self._catalog.data)):
+            await client.apply_effect(effect_id)
+            effect_changed = True
 
-        await self.coordinator.async_request_refresh()
+        if effect_changed:
+            await asyncio.gather(
+                self.coordinator.async_refresh(),
+                self._catalog.async_refresh(),
+            )
+        else:
+            await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await async_stop_effect(self._entry.runtime_data.client)
-        await self.coordinator.async_request_refresh()
+        result = await self._entry.runtime_data.client.pause_rendering()
+        self._set_output_state(read_field(result, "state", "paused"))
+
+    def _set_output_state(self, state: Any) -> None:
+        current = dict(self.coordinator.data or {})
+        current["active_effect_state"] = str(state)
+        self.coordinator.async_set_updated_data(current)
 
 
 class HypercolorDeviceLight(CoordinatorEntity, LightEntity):
@@ -231,7 +218,7 @@ class HypercolorDeviceLight(CoordinatorEntity, LightEntity):
         return None
 
 
-class HypercolorZoneLight(CoordinatorEntity, LightEntity):
+class HypercolorZoneLight(MultiCoordinatorEntity, LightEntity):
     """One zone (render group) of the active scene.
 
     Zones are scene-scoped: when the active scene changes, entities for
@@ -244,7 +231,7 @@ class HypercolorZoneLight(CoordinatorEntity, LightEntity):
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], zone_id: str) -> None:
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["state"])
+        super().__init__(runtime.coordinators["state"], runtime.coordinators["catalog"])
         self._entry = entry
         self._zone_id = zone_id
         self._catalog = runtime.coordinators["catalog"]
