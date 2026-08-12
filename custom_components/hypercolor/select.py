@@ -44,14 +44,7 @@ async def async_setup_entry(
             active_key="active_layout",
             action=entry.runtime_data.client.apply_layout,
         ),
-        HypercolorCatalogSelect(
-            entry,
-            key="presets",
-            name="Preset",
-            unique_suffix="preset",
-            active_key="active_preset",
-            action=entry.runtime_data.client.apply_preset,
-        ),
+        HypercolorPresetSelect(entry),
     ]
     if entry.options.get(CONF_CHANNELS_AUDIO, False):
         entities.append(HypercolorAudioDeviceSelect(entry))
@@ -84,25 +77,13 @@ class HypercolorCatalogSelect(CoordinatorEntity, SelectEntity):
 
     @property
     def options(self) -> list[str]:
-        items = self._items
-        if self._key != "presets":
-            return [item_name(item) for item in items]
-        active_effect = read_field(self._state.data, "active_effect_id")
-        return [
-            item_name(item)
-            for item in items
-            if read_field(item, "effect_id", active_effect) == active_effect
-        ]
+        return [item_name(item) for item in self._items]
 
     @property
     def current_option(self) -> str | None:
         if self._active_key is None:
             return None
-        if self._active_key == "active_preset":
-            active = read_field(self._state.data, "active_effect_detail")
-            active_id = read_field(active, "active_preset_id")
-        else:
-            active_id = read_field(self._state.data, self._active_key)
+        active_id = read_field(self._state.data, self._active_key)
         if not active_id:
             return None
         for item in self._items:
@@ -119,6 +100,69 @@ class HypercolorCatalogSelect(CoordinatorEntity, SelectEntity):
     @property
     def _items(self) -> list[Any]:
         return catalog_items(self.coordinator.data, self._key)
+
+
+class HypercolorPresetSelect(CoordinatorEntity, SelectEntity):
+    _attr_has_entity_name = True
+    _attr_name = "Preset"
+
+    def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
+        runtime = entry.runtime_data
+        super().__init__(runtime.coordinators["catalog"])
+        self._entry = entry
+        self._state = runtime.coordinators["state"]
+        self._attr_device_info = hub_device_info(runtime, entry.data)
+        self._attr_unique_id = f"{runtime.server.instance_id}:preset"
+
+    @property
+    def options(self) -> list[str]:
+        return list(_preset_option_map(self._items))
+
+    @property
+    def current_option(self) -> str | None:
+        active_id = read_field(self._state.data, "active_preset")
+        if not active_id:
+            return None
+        for option, preset in _preset_option_map(self._items).items():
+            if item_id(preset) == str(active_id):
+                return option
+        return None
+
+    async def async_select_option(self, option: str) -> None:
+        preset = _preset_option_map(self._items).get(option)
+        if preset is None:
+            return
+        await self._entry.runtime_data.client.apply_effect_preset(
+            str(read_field(preset, "effect_id")),
+            item_id(preset),
+        )
+        await self._state.async_request_refresh()
+        await self.coordinator.async_request_refresh()
+
+    @property
+    def _items(self) -> list[Any]:
+        return catalog_items(self.coordinator.data, "presets")
+
+
+def _preset_option_map(items: list[Any]) -> dict[str, Any]:
+    counts: dict[str, int] = {}
+    for item in items:
+        name = item_name(item)
+        counts[name] = counts.get(name, 0) + 1
+
+    options: dict[str, Any] = {}
+    for item in items:
+        name = item_name(item)
+        option = name
+        if counts[name] > 1:
+            origin = read_field(item, "origin")
+            origin_value = str(getattr(origin, "value", origin))
+            label = "Built-in" if origin_value == "bundled" else "Saved"
+            option = f"{name} ({label})"
+        if option in options:
+            option = f"{option} [{item_id(item)[:8]}]"
+        options[option] = item
+    return options
 
 
 class HypercolorAudioDeviceSelect(CoordinatorEntity, SelectEntity):

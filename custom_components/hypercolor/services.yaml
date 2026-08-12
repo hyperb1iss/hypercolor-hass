@@ -229,6 +229,10 @@ apply_preset:
       selector:
         config_entry:
           integration: hypercolor
+    effect_id:
+      required: true
+      selector:
+        text:
     preset_id:
       required: true
       selector:

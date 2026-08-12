@@ -171,7 +171,10 @@ class HypercolorMasterLight(CoordinatorEntity, LightEntity):
             resume := self._last_effect_id or first_effect_id(self._catalog.data)
         ):
             preset = self._last_preset_id if resume == self._last_effect_id else None
-            await client.apply_effect(resume, preset_id=preset)
+            if preset:
+                await client.apply_effect_preset(resume, preset)
+            else:
+                await client.apply_effect(resume)
 
         await self.coordinator.async_request_refresh()
 

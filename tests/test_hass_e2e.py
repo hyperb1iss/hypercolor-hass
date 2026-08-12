@@ -34,6 +34,10 @@ async def fake_daemon(
     daemon = _FakeHypercolorDaemon()
     app = web.Application()
     app.router.add_get("/api/v1/ws", daemon.websocket)
+    app.router.add_post(
+        "/api/v1/effects/{effect_id}/presets/{preset_id}/apply",
+        daemon.apply_effect_preset,
+    )
     app.router.add_post("/api/v1/effects/{effect_id}/apply", daemon.apply_effect)
     app.router.add_patch("/api/v1/effects/current/controls", daemon.update_controls)
     app.router.add_put("/api/v1/settings/brightness", daemon.set_brightness)
@@ -238,13 +242,41 @@ async def test_master_turn_on_resumes_last_effect(
     # before turn-off, not just the bare effect.
     assert {
         "effect_id": "rainbow",
-        "controls": {},
+        "controls": {"speed": 60},
         "preset_id": "preset-rainbow",
     } in fake_daemon.applied_effects
     resumed = hass.states.get(master.entity_id)
     assert resumed is not None
     assert resumed.state == "on"
     assert resumed.attributes["effect"] == "Rainbow"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_preset_select_applies_unified_effect_preset(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    fake_daemon: _FakeHypercolorDaemon,
+) -> None:
+    entry = await _setup_entry(hass, port=fake_daemon.port)
+    preset_select = _first_state(
+        hass,
+        "select",
+        lambda state: state.entity_id.endswith("_preset"),
+    )
+
+    assert preset_select.attributes["options"] == ["Rainbow Soft"]
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": preset_select.entity_id, "option": "Rainbow Soft"},
+        blocking=True,
+    )
+
+    assert {
+        "effect_id": "rainbow",
+        "controls": {"speed": 60},
+        "preset_id": "preset-rainbow",
+    } in fake_daemon.applied_effects
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -327,6 +359,7 @@ class _FakeHypercolorDaemon:
     def __init__(self) -> None:
         self.port = 0
         self.active_effect_id = "rainbow"
+        self.active_preset_id = "preset-rainbow"
         self.brightness = 80
         self.control_values: dict[str, Any] = {"speed": 60.0, "brightness": 80.0}
         self.control_updates: list[dict[str, Any]] = []
@@ -360,6 +393,15 @@ class _FakeHypercolorDaemon:
 
     async def handle_api(self, request: web.Request) -> web.Response:
         route = f"{request.method} {request.path.removeprefix('/api/v1')}"
+        parts = request.path.removeprefix("/api/v1/").split("/")
+        if (
+            request.method == "GET"
+            and len(parts) == 3
+            and parts[0] == "effects"
+            and parts[2] == "presets"
+        ):
+            presets = [self._preset()] if parts[1] == "rainbow" else []
+            return self._ok(self._items(presets))
         responses = {
             "GET /server": self._server,
             "GET /status": self._status,
@@ -388,6 +430,29 @@ class _FakeHypercolorDaemon:
             applied["render_group"] = body["render_group"]
         if body.get("preset_id"):
             applied["preset_id"] = body["preset_id"]
+        self.applied_effects.append(applied)
+        return self._ok(
+            {
+                "effect": {"id": effect_id, "name": self._effect_name(effect_id)},
+                "applied_controls": controls,
+            }
+        )
+
+    async def apply_effect_preset(self, request: web.Request) -> web.Response:
+        body = await _json_body(request)
+        effect_id = request.match_info["effect_id"]
+        preset_id = request.match_info["preset_id"]
+        controls = dict(self._preset()["controls"])
+        self.active_effect_id = effect_id
+        self.active_preset_id = preset_id
+        self.control_values.update(controls)
+        applied = {
+            "effect_id": effect_id,
+            "controls": controls,
+            "preset_id": preset_id,
+        }
+        if body.get("render_group"):
+            applied["render_group"] = body["render_group"]
         self.applied_effects.append(applied)
         return self._ok(
             {
@@ -533,7 +598,7 @@ class _FakeHypercolorDaemon:
                 key: {"float": float(value)} if isinstance(value, (int, float)) else value
                 for key, value in self.control_values.items()
             },
-            "active_preset_id": "preset-rainbow",
+            "active_preset_id": self.active_preset_id,
             "render_group_id": "zone-primary",
             "controls_version": 1,
         }
@@ -678,6 +743,9 @@ class _FakeHypercolorDaemon:
             "id": "preset-rainbow",
             "name": "Rainbow Soft",
             "effect_id": "rainbow",
+            "origin": "bundled",
+            "editable": False,
+            "description": "A softer bundled look",
             "controls": {"speed": 60},
             "tags": ["test"],
         }

@@ -82,11 +82,12 @@ async def test_load_state_resolves_cover_image_without_client_helper() -> None:
 
 async def test_load_catalog_gathers_home_assistant_picker_lists() -> None:
     client = SimpleNamespace(
+        get_active_effect=_async_value(SimpleNamespace(id="aurora")),
         get_effects=_async_value(["effect"]),
         get_scenes=_async_value(["scene"]),
         get_profiles=_async_value(["profile"]),
         get_layouts=_async_value(["layout"]),
-        get_presets=_async_value(["preset"]),
+        get_effect_presets=_async_effect_presets("aurora", ["preset"]),
     )
 
     catalog = await load_catalog(client)
@@ -98,6 +99,20 @@ async def test_load_catalog_gathers_home_assistant_picker_lists() -> None:
         "layouts": ["layout"],
         "presets": ["preset"],
     }
+
+
+async def test_load_catalog_has_empty_preset_stack_without_active_effect() -> None:
+    client = SimpleNamespace(
+        get_active_effect=_async_value(None),
+        get_effects=_async_value([]),
+        get_scenes=_async_value([]),
+        get_profiles=_async_value([]),
+        get_layouts=_async_value([]),
+    )
+
+    catalog = await load_catalog(client)
+
+    assert catalog["presets"] == []
 
 
 def test_ws_events_schedule_refresh_without_overwriting_state() -> None:
@@ -125,6 +140,14 @@ def test_ws_events_schedule_refresh_without_overwriting_state() -> None:
 
 def _async_value(value: object):
     async def _loader() -> object:
+        return value
+
+    return _loader
+
+
+def _async_effect_presets(expected_effect_id: str, value: object):
+    async def _loader(effect_id: str) -> object:
+        assert effect_id == expected_effect_id
         return value
 
     return _loader

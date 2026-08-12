@@ -163,7 +163,12 @@ def async_setup_services(hass: HomeAssistant) -> None:
         hass,
         SERVICE_APPLY_PRESET,
         _apply_preset,
-        _schema({vol.Required("preset_id"): cv.string}),
+        _schema(
+            {
+                vol.Required("effect_id"): cv.string,
+                vol.Required("preset_id"): cv.string,
+            }
+        ),
     )
     _register(
         hass,
@@ -271,7 +276,14 @@ async def _apply_effect(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
     zone_id = call.data.get("zone_id")
     if preset_id := call.data.get("preset_id"):
-        await entry.runtime_data.client.apply_preset(preset_id, render_group=zone_id)
+        effect_id = call.data.get("effect_id")
+        if effect_id is None:
+            raise HomeAssistantError("effect_id is required when preset_id is set")
+        await entry.runtime_data.client.apply_effect_preset(
+            effect_id,
+            preset_id,
+            render_group=zone_id,
+        )
         return
     effect_id = call.data.get("effect_id")
     if effect_id is None:
@@ -400,7 +412,10 @@ async def _apply_layout(call: ServiceCall) -> None:
 
 async def _apply_preset(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
-    await entry.runtime_data.client.apply_preset(call.data["preset_id"])
+    await entry.runtime_data.client.apply_effect_preset(
+        call.data["effect_id"],
+        call.data["preset_id"],
+    )
 
 
 async def _save_preset(call: ServiceCall) -> dict[str, Any]:
@@ -426,10 +441,11 @@ async def _delete_preset(call: ServiceCall) -> None:
 
 async def _list_presets(call: ServiceCall) -> dict[str, Any]:
     entry = _entry(call.hass, call)
-    presets = await entry.runtime_data.client.get_presets()
-    effect_id = call.data.get("effect_id")
-    if effect_id:
-        presets = [preset for preset in presets if _field(preset, "effect_id") == effect_id]
+    state = entry.runtime_data.coordinators["state"].data
+    effect_id = call.data.get("effect_id") or state.get("active_effect_id")
+    if not effect_id:
+        raise HomeAssistantError("effect_id is required when no effect is active")
+    presets = await entry.runtime_data.client.get_effect_presets(effect_id)
     return {"presets": [_jsonable(preset) for preset in presets]}
 
 

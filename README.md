@@ -177,13 +177,14 @@ so multi-daemon setups stay unambiguous.
 
 | Service | What it does |
 | --- | --- |
-| `hypercolor.apply_effect` | apply an effect by id, optionally with controls/transition/preset |
+| `hypercolor.apply_effect` | apply an effect by id, optionally with controls, transition, or an effect-scoped preset id |
 | `hypercolor.set_color` | shortcut for the `solid_color` effect, takes `hex` or `r/g/b` |
 | `hypercolor.set_control` | patch a single control on the running effect |
 | `hypercolor.activate_scene` / `create_scene` | activate or create a scene |
 | `hypercolor.activate_profile` / `save_profile` | activate or capture a profile |
 | `hypercolor.apply_layout` | switch spatial layouts |
-| `hypercolor.apply_preset` / `save_preset` / `delete_preset` / `list_presets` | full preset CRUD |
+| `hypercolor.apply_preset` | apply a bundled or saved preset by `effect_id` and `preset_id` |
+| `hypercolor.save_preset` / `delete_preset` / `list_presets` | manage saved presets and list the active effect's unified preset stack |
 | `hypercolor.identify_device` | flash a specific device for `duration_ms` |
 | `hypercolor.set_display_face` | composite an effect onto a display face with blend mode and opacity |
 | `hypercolor.upload_effect` | push a new HTML effect from a path or inline content |
