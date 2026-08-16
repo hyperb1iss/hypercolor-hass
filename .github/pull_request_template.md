@@ -2,7 +2,7 @@
 Thanks for the PR! Please:
 - Run `just verify` locally before pushing.
 - Use a conventional commit subject (`feat(hass):`, `fix(hass):`, etc).
-- Keep the PR focused — one feature, fix, or refactor at a time.
+- Keep the PR focused: one feature, fix, or refactor at a time.
 -->
 
 ## Summary

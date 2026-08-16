@@ -33,7 +33,6 @@ from .const import (
     DOMAIN,
     OPTIONS_DEFAULTS,
 )
-from .entity import read_field
 
 
 class HypercolorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -313,12 +312,8 @@ def _device_options(
     selected_ids: list[str],
 ) -> list[selector.SelectOptionDict]:
     runtime = entry.runtime_data if entry.state is ConfigEntryState.LOADED else None
-    coordinator = read_field(runtime, "coordinators", {}).get("devices") if runtime else None
-    devices = read_field(coordinator, "data", []) or []
-    labels = {
-        str(read_field(device, "id")): str(read_field(device, "name", read_field(device, "id")))
-        for device in devices
-    }
+    devices = runtime.snapshot.devices if runtime is not None else ()
+    labels = {device.id: device.name for device in devices}
     for device_id in selected_ids:
         labels.setdefault(device_id, device_id)
     return [

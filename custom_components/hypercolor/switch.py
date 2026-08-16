@@ -6,10 +6,16 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from hypercolor.models import Device
 
 from .const import CONF_CHANNELS_AUDIO
-from .entity import add_configured_device_entities, child_device_info, hub_device_info, read_field
+from .entity import (
+    HypercolorDeviceEntity,
+    HypercolorEntity,
+    add_configured_device_entities,
+    hub_device_info,
+)
 from .runtime_data import HypercolorRuntimeData
 
 _AUDIO_DEVICE_DEFAULT = "default"
@@ -28,66 +34,59 @@ async def async_setup_entry(
     add_configured_device_entities(entry, async_add_entities, HypercolorDeviceEnabledSwitch)
 
 
-class HypercolorAudioReactiveSwitch(CoordinatorEntity, SwitchEntity):
+class HypercolorAudioReactiveSwitch(HypercolorEntity, SwitchEntity):
     _attr_has_entity_name = True
     _attr_name = "Audio reactive"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
+        super().__init__(entry)
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["audio"])
-        self._entry = entry
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:audio_reactive"
 
     @property
     def is_on(self) -> bool | None:
-        current = read_field(read_field(self.coordinator.data, "devices"), "current")
-        return audio_device_enabled(current)
+        devices = self.snapshot.audio.devices
+        return audio_device_enabled(devices.current if devices is not None else None)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self._entry.runtime_data.client.set_audio_device(_AUDIO_DEVICE_DEFAULT)
-        await self.coordinator.async_request_refresh()
+        await self._runtime.async_mutate(
+            lambda: self._runtime.client.set_audio_device(_AUDIO_DEVICE_DEFAULT)
+        )
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._entry.runtime_data.client.set_audio_device(_AUDIO_DEVICE_NONE)
-        await self.coordinator.async_request_refresh()
+        await self._runtime.async_mutate(
+            lambda: self._runtime.client.set_audio_device(_AUDIO_DEVICE_NONE)
+        )
 
 
-class HypercolorDeviceEnabledSwitch(CoordinatorEntity, SwitchEntity):
+class HypercolorDeviceEnabledSwitch(HypercolorDeviceEntity, SwitchEntity):
     _attr_has_entity_name = True
     _attr_name = "Enabled"
 
-    def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], device: Any) -> None:
+    def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], device: Device) -> None:
+        super().__init__(entry, device)
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["devices"])
-        self._entry = entry
-        self._device_id = str(read_field(device, "id"))
-        self._attr_device_info = child_device_info(runtime, device)
         self._attr_unique_id = f"{runtime.server.instance_id}:device:{self._device_id}:enabled"
 
     @property
     def is_on(self) -> bool | None:
-        if device := self._device:
-            return bool(read_field(device, "enabled", True))
-        return None
+        return device.enabled if (device := self._device) is not None else None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self._entry.runtime_data.client.update_device(self._device_id, enabled=True)
-        await self.coordinator.async_request_refresh()
+        async def operation() -> None:
+            await self._runtime.client.update_device(self._device_id, enabled=True)
+
+        await self._runtime.async_mutate(operation)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._entry.runtime_data.client.update_device(self._device_id, enabled=False)
-        await self.coordinator.async_request_refresh()
+        async def operation() -> None:
+            await self._runtime.client.update_device(self._device_id, enabled=False)
 
-    @property
-    def _device(self) -> Any | None:
-        for device in self.coordinator.data or []:
-            if str(read_field(device, "id")) == self._device_id:
-                return device
-        return None
+        await self._runtime.async_mutate(operation)
 
 
-def audio_device_enabled(device_id: Any) -> bool | None:
+def audio_device_enabled(device_id: str | None) -> bool | None:
     if device_id is None:
         return None
-    return str(device_id).lower() not in {"", "disabled", _AUDIO_DEVICE_NONE}
+    return device_id.lower() not in {"", "disabled", _AUDIO_DEVICE_NONE}

@@ -22,10 +22,7 @@ async def async_get_config_entry_diagnostics(
             "config": {**entry.data, **entry.options},
             "server": asdict(runtime.server),
             "connection": runtime.connection_state.snapshot(),
-            "coordinators": {
-                name: coordinator.last_update_success
-                for name, coordinator in runtime.coordinators.items()
-            },
+            "snapshot_coordinator": runtime.coordinator.last_update_success,
         },
         TO_REDACT,
     )

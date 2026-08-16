@@ -1,0 +1,58 @@
+name: Set up Hypercolor development environment
+description: Check out the pinned client and install uv with Python
+
+inputs:
+  hypercolor-ref:
+    description: Full Hypercolor client commit SHA
+    required: false
+    default: 978096e614695777d3cd13ea0b184877e46afd84
+  hypercolor-token:
+    description: Optional token for the Hypercolor repository
+    required: false
+    default: ""
+  python-version:
+    description: Python version to install
+    required: false
+    default: "3.14"
+
+runs:
+  using: composite
+  steps:
+    - name: Set up uv
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      with:
+        enable-cache: true
+        cache-dependency-glob: uv.lock
+
+    - name: Set up just
+      shell: bash
+      run: uv tool install rust-just==1.58.0
+
+    - name: Set up Python
+      shell: bash
+      env:
+        PYTHON_VERSION: ${{ inputs.python-version }}
+      run: uv python install "${PYTHON_VERSION}"
+
+    - name: Check out Hypercolor client
+      shell: bash
+      env:
+        HYPERCOLOR_REF: ${{ inputs.hypercolor-ref }}
+        HYPERCOLOR_TOKEN: ${{ inputs.hypercolor-token }}
+      run: |
+        set -euo pipefail
+        if [[ ! "${HYPERCOLOR_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+          echo "HYPERCOLOR_REF must be a full commit SHA" >&2
+          exit 1
+        fi
+        git init -q ../hypercolor
+        git -C ../hypercolor remote add origin https://github.com/hyperb1iss/hypercolor.git
+        if [[ -n "${HYPERCOLOR_TOKEN}" ]]; then
+          auth="$(printf 'x-access-token:%s' "${HYPERCOLOR_TOKEN}" | base64 | tr -d '\n')"
+          git -C ../hypercolor \
+            -c "http.extraheader=AUTHORIZATION: basic ${auth}" \
+            fetch --depth 1 origin "${HYPERCOLOR_REF}"
+        else
+          git -C ../hypercolor fetch --depth 1 origin "${HYPERCOLOR_REF}"
+        fi
+        git -C ../hypercolor checkout --detach FETCH_HEAD

@@ -1,6 +1,6 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
-# 💜 hypercolor-hass — list available recipes
+# 💜 hypercolor-hass: list available recipes
 default:
     just --list
 
@@ -24,15 +24,15 @@ typecheck:
 
 # 🌊 run pytest
 test:
-    uv run pytest
+    uv run pytest --cov=custom_components/hypercolor --cov-report=term-missing
 
-# 🦋 end-to-end pytest (mocked daemon)
+# 🦋 end-to-end pytest (fake daemon)
 e2e:
-    uv run pytest tests/test_hass_e2e.py
+    uv run pytest tests/test_hass_control_surface.py tests/test_hass_entity_lifecycle.py
 
 # ⚡ end-to-end pytest against a real daemon
 e2e-real:
-    HYPERCOLOR_HASS_REAL_E2E=1 uv run pytest tests/test_hass_e2e.py -m e2e
+    HYPERCOLOR_HASS_REAL_E2E=1 uv run pytest tests/test_hass_real_daemon.py -m e2e
 
 # 💎 build sdist + wheel
 build:
@@ -55,7 +55,7 @@ hass-check:
     uv run python scripts/hass_dev.py --setup-only
     uv run hass --script check_config --config .dev/hass/config
 
-# 🌈 the full pipeline — what CI runs
+# 🌈 the full pipeline: what CI runs
 verify: lint typecheck test metadata build
 
 # 🔄 reset transient HA state under .dev/

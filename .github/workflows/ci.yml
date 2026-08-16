@@ -7,6 +7,9 @@ on:
     branches: [main]
     tags: ["v*.*.*"]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: >-
@@ -14,113 +17,134 @@ concurrency:
     github.ref != 'refs/heads/main' }}
 
 jobs:
+  workflow-quality:
+    name: Workflow syntax and shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install actionlint
+        env:
+          ACTIONLINT_CHECKSUM: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/actionlint.tar.gz"
+          curl --fail --location --silent --show-error \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            --output "${archive}"
+          printf '%s  %s\n' "${ACTIONLINT_CHECKSUM}" "${archive}" | sha256sum --check
+          tar -xzf "${archive}" -C "${RUNNER_TEMP}" actionlint
+
+      - name: Validate workflows
+        run: |
+          set -euo pipefail
+          shellcheck --version
+          "${RUNNER_TEMP}/actionlint" \
+            -color \
+            -shellcheck "$(command -v shellcheck)"
+
   verify:
     name: Lint, typecheck, test, build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Check out Hypercolor client
-        env:
-          HYPERCOLOR_REF: ${{ vars.HYPERCOLOR_REF || '978096e614695777d3cd13ea0b184877e46afd84' }}
-          HYPERCOLOR_TOKEN: ${{ secrets.HYPERCOLOR_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ ! "${HYPERCOLOR_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "HYPERCOLOR_REF must be a full commit SHA" >&2
-            exit 1
-          fi
-          if [ -n "${HYPERCOLOR_TOKEN}" ]; then
-            remote_url="https://x-access-token:${HYPERCOLOR_TOKEN}@github.com/hyperb1iss/hypercolor.git"
-          else
-            remote_url="https://github.com/hyperb1iss/hypercolor"
-          fi
-          git init -q ../hypercolor
-          git -C ../hypercolor remote add origin "${remote_url}"
-          git -C ../hypercolor fetch --depth 1 origin "${HYPERCOLOR_REF}"
-          git -C ../hypercolor checkout --detach FETCH_HEAD
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+      - uses: ./.github/actions/setup-hypercolor
         with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          hypercolor-ref: ${{ vars.HYPERCOLOR_REF || '978096e614695777d3cd13ea0b184877e46afd84' }}
+          hypercolor-token: ${{ secrets.HYPERCOLOR_TOKEN }}
 
-      - name: Set up Python
-        run: uv python install 3.14
-
-      - name: Sync (locked)
+      - name: Sync dependencies
         run: uv sync --all-groups --locked
 
-      - name: Lint
-        run: |
-          uv run ruff check .
-          uv run ruff format --check .
-
-      - name: Typecheck
-        run: uv run ty check
-
-      - name: Test
-        run: uv run pytest
-
-      - name: Metadata
-        run: uv run python scripts/check_integration_metadata.py
-
-      - name: Build
-        run: uv build
+      - name: Verify
+        run: just verify
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
           path: dist/
           retention-days: 7
 
+  pypi-compatibility:
+    name: Published Hypercolor compatibility
+    runs-on: ubuntu-latest
+    env:
+      UV_NO_SOURCES: "1"
+      UV_PROJECT_ENVIRONMENT: .venv-pypi
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up just
+        run: uv tool install rust-just==1.58.0
+
+      - name: Set up Python
+        run: uv python install 3.14
+
+      - name: Sync from published packages
+        run: uv sync --all-groups
+
+      - name: Prove Hypercolor came from the isolated environment
+        run: |
+          uv run --no-sync python - <<'PY'
+          import sys
+          from pathlib import Path
+
+          import hypercolor
+
+          package = Path(hypercolor.__file__).resolve()
+          environment = Path(sys.prefix).resolve()
+          if not package.is_relative_to(environment):
+              raise SystemExit(f"Hypercolor loaded outside {environment}: {package}")
+          print(f"Hypercolor loaded from {package}")
+          PY
+
+      - name: Verify against published Hypercolor
+        run: just verify
+
   hassfest:
     name: Home Assistant hassfest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: home-assistant/actions/hassfest@master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: home-assistant/actions/hassfest@a7c616ce81ccda50150bf1595786c71b1883fabb
 
   hacs:
     name: HACS validation
     runs-on: ubuntu-latest
-    # HACS validation walks the public GitHub API, so it can only run while
-    # the repo is public. Flip the repo visibility and this job lights up.
     if: ${{ github.event.repository.visibility == 'public' }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: hacs/action@main
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa
         with:
           category: integration
-          # Temporary until hypercolor is listed in home-assistant/brands
-          # (icon/logo submission upstream). Drop this line once merged.
           ignore: brands
 
   release:
     name: Publish GitHub release
     if: >-
       ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') &&
+      needs.workflow-quality.result == 'success' &&
       needs.verify.result == 'success' &&
+      needs.pypi-compatibility.result == 'success' &&
       needs.hassfest.result == 'success' &&
       (needs.hacs.result == 'success' || needs.hacs.result == 'skipped') }}
-    needs: [verify, hassfest, hacs]
-    runs-on: ubuntu-latest
+    needs: [workflow-quality, verify, pypi-compatibility, hassfest, hacs]
+    uses: hyperb1iss/shared-workflows/.github/workflows/github-release.yml@9edda2222785fe0351a26a07bf26a3385874d288
+    with:
+      attach-artifacts: true
+      artifact-pattern: dist
+      release-notes-model: claude-opus-5
+      release-notes-provider: anthropic
     permissions:
+      actions: read
       contents: write
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist
-
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ./dist/*
-          generate_release_notes: true
-          fail_on_unmatched_files: true
+    secrets: inherit

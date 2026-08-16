@@ -36,6 +36,35 @@
       "missing_instance_id": "The discovered daemon did not include an instance ID."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Hypercolor options",
+        "data": {
+          "reconcile_interval_s": "Reconcile interval",
+          "channels.audio": "Audio entities",
+          "channels.metrics": "Metrics entities",
+          "live_controls_enabled": "Live control number entities",
+          "audio_beat_hold_ms": "Audio beat hold",
+          "disconnect_grace_s": "Disconnect grace",
+          "unavailable_after_s": "Unavailable after",
+          "per_device_entities": "Per-device entities"
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "connected": {
+        "name": "Connected"
+      }
+    },
+    "sensor": {
+      "active_effect": {
+        "name": "Active effect"
+      }
+    }
+  },
   "issues": {
     "auth_invalid": {
       "title": "Hypercolor API key was rejected",

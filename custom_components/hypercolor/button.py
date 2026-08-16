@@ -1,25 +1,20 @@
 from __future__ import annotations
 
-import contextlib
 import secrets
 from collections.abc import Awaitable, Callable
-from typing import Any
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from hypercolor import HypercolorNotFoundError
+from hypercolor.models import Device
 
 from .entity import (
+    HypercolorDeviceEntity,
+    HypercolorEntity,
     add_configured_device_entities,
-    catalog_items,
-    child_device_info,
     hub_device_info,
-    item_id,
-    read_field,
 )
 from .runtime_data import HypercolorRuntimeData
 
@@ -29,12 +24,13 @@ async def async_setup_entry(
     entry: ConfigEntry[HypercolorRuntimeData],
     async_add_entities: AddEntitiesCallback,
 ) -> None:
+    runtime = entry.runtime_data
     entities: list[ButtonEntity] = [
         HypercolorActionButton(
             entry,
             name="Discover devices",
             unique_suffix="discover_devices",
-            action=entry.runtime_data.client.discover_devices,
+            action=lambda: runtime.async_mutate(runtime.client.discover_devices),
         ),
         HypercolorEffectNavigationButton(entry, "Previous effect", "previous_effect", -1),
         HypercolorEffectNavigationButton(entry, "Next effect", "next_effect", 1),
@@ -43,14 +39,14 @@ async def async_setup_entry(
             entry,
             name="Stop effect",
             unique_suffix="stop_effect",
-            action=lambda: _stop_effect(entry.runtime_data.client),
+            action=runtime.async_stop_effect,
         ),
     ]
     async_add_entities(entities)
     add_configured_device_entities(entry, async_add_entities, HypercolorIdentifyDeviceButton)
 
 
-class HypercolorActionButton(CoordinatorEntity, ButtonEntity):
+class HypercolorActionButton(HypercolorEntity, ButtonEntity):
     _attr_has_entity_name = True
 
     def __init__(
@@ -59,11 +55,10 @@ class HypercolorActionButton(CoordinatorEntity, ButtonEntity):
         *,
         name: str,
         unique_suffix: str,
-        action: Callable[[], Awaitable[Any]],
+        action: Callable[[], Awaitable[object]],
     ) -> None:
+        super().__init__(entry)
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["state"])
-        self._entry = entry
         self._action = action
         self._attr_name = name
         self._attr_device_info = hub_device_info(runtime, entry.data)
@@ -71,10 +66,9 @@ class HypercolorActionButton(CoordinatorEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         await self._action()
-        await self._entry.runtime_data.coordinators["state"].async_request_refresh()
 
 
-class HypercolorEffectNavigationButton(CoordinatorEntity, ButtonEntity):
+class HypercolorEffectNavigationButton(HypercolorEntity, ButtonEntity):
     _attr_has_entity_name = True
 
     def __init__(
@@ -84,48 +78,39 @@ class HypercolorEffectNavigationButton(CoordinatorEntity, ButtonEntity):
         unique_suffix: str,
         step: int,
     ) -> None:
+        super().__init__(entry)
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["catalog"])
-        self._entry = entry
-        self._state = runtime.coordinators["state"]
         self._step = step
         self._attr_name = name
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:{unique_suffix}"
 
     async def async_press(self) -> None:
-        effects = catalog_items(self.coordinator.data, "effects")
+        effects = self.snapshot.catalog.effects.items
         if not effects:
             return
         if self._step == 0:
             effect = secrets.choice(effects)
         else:
-            active = read_field(self._state.data, "active_effect_id")
+            active_id = self.snapshot.state.active_effect_id
             index = next(
-                (idx for idx, effect in enumerate(effects) if item_id(effect) == active),
+                (idx for idx, effect in enumerate(effects) if effect.id == active_id),
                 -1,
             )
             effect = effects[(index + self._step) % len(effects)]
-        await self._entry.runtime_data.client.apply_effect(item_id(effect))
-        await self._state.async_request_refresh()
+        await self._runtime.async_mutate(lambda: self._runtime.client.apply_effect(effect.id))
 
 
-class HypercolorIdentifyDeviceButton(CoordinatorEntity, ButtonEntity):
+class HypercolorIdentifyDeviceButton(HypercolorDeviceEntity, ButtonEntity):
     _attr_has_entity_name = True
     _attr_name = "Identify"
 
-    def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], device: Any) -> None:
+    def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], device: Device) -> None:
+        super().__init__(entry, device)
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["devices"])
-        self._entry = entry
-        self._device_id = str(read_field(device, "id"))
-        self._attr_device_info = child_device_info(runtime, device)
         self._attr_unique_id = f"{runtime.server.instance_id}:device:{self._device_id}:identify"
 
     async def async_press(self) -> None:
-        await self._entry.runtime_data.client.identify_device(self._device_id)
-
-
-async def _stop_effect(client: Any) -> None:
-    with contextlib.suppress(HypercolorNotFoundError):
-        await client.stop_effect()
+        await self._runtime.async_mutate(
+            lambda: self._runtime.client.identify_device(self._device_id)
+        )

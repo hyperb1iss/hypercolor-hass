@@ -15,6 +15,7 @@ from homeassistant.helpers import (
 from homeassistant.helpers.httpx_client import get_async_client
 
 from hypercolor import HypercolorClient
+from hypercolor.models import Device
 
 from .api import (
     CannotConnectError,
@@ -24,6 +25,7 @@ from .api import (
 )
 from .const import (
     CONF_API_KEY,
+    CONF_CHANNELS_AUDIO,
     CONF_RECONCILE_INTERVAL_S,
     DOMAIN,
     OPTIONS_DEFAULTS,
@@ -31,15 +33,13 @@ from .const import (
 )
 from .coordinator import (
     HypercolorCoordinator,
-    load_audio,
-    load_catalog,
-    load_metrics,
-    load_state,
+    load_snapshot,
     reconcile_loop,
     websocket_loop,
 )
-from .entity import child_device_identifier, read_field
-from .runtime_data import HypercolorRuntimeData
+from .entity import child_device_identifier
+from .models import HypercolorState
+from .runtime_data import ConnectionSource, ConnectionState, HypercolorRuntimeData
 from .services import async_setup_services
 
 type HypercolorConfigEntry = ConfigEntry[HypercolorRuntimeData]
@@ -76,68 +76,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: HypercolorConfigEntry) -
         api_key=entry.data.get(CONF_API_KEY),
         httpx_client=httpx_client,
     )
+    connection_state = ConnectionState()
+    connection_state.set_connected(ConnectionSource.SNAPSHOT)
+    coordinator = HypercolorCoordinator(
+        hass,
+        config_entry=entry,
+        loader=lambda previous: load_snapshot(
+            client,
+            load_audio=bool(
+                entry.options.get(
+                    CONF_CHANNELS_AUDIO,
+                    OPTIONS_DEFAULTS[CONF_CHANNELS_AUDIO],
+                )
+            ),
+            previous=previous,
+        ),
+        connection_state=connection_state,
+    )
     runtime_data = HypercolorRuntimeData(
         client=client,
         server=server,
+        coordinator=coordinator,
+        connection_state=connection_state,
     )
-    runtime_data.connection_state.set_connected()
     entry.runtime_data = runtime_data
-    state = HypercolorCoordinator(
-        hass,
-        config_entry=entry,
-        name="state",
-        loader=lambda: load_state(client),
-        connection_state=runtime_data.connection_state,
-    )
-    catalog = HypercolorCoordinator(
-        hass,
-        config_entry=entry,
-        name="catalog",
-        loader=lambda: load_catalog(client),
-        connection_state=runtime_data.connection_state,
-    )
-    devices = HypercolorCoordinator(
-        hass,
-        config_entry=entry,
-        name="devices",
-        loader=client.get_devices,
-        connection_state=runtime_data.connection_state,
-    )
-    metrics = HypercolorCoordinator(
-        hass,
-        config_entry=entry,
-        name="metrics",
-        loader=lambda: load_metrics(client),
-        connection_state=runtime_data.connection_state,
-    )
-    audio = HypercolorCoordinator(
-        hass,
-        config_entry=entry,
-        name="audio",
-        loader=lambda: load_audio(client),
-        connection_state=runtime_data.connection_state,
-    )
-    runtime_data.coordinators.update(
-        {
-            "state": state,
-            "catalog": catalog,
-            "devices": devices,
-            "metrics": metrics,
-            "audio": audio,
-        }
-    )
-    await state.async_config_entry_first_refresh()
-    await catalog.async_config_entry_first_refresh()
-    await devices.async_config_entry_first_refresh()
-    if entry.options.get("channels.metrics", OPTIONS_DEFAULTS["channels.metrics"]):
-        await metrics.async_config_entry_first_refresh()
-    if entry.options.get("channels.audio", OPTIONS_DEFAULTS["channels.audio"]):
-        await audio.async_config_entry_first_refresh()
+    await coordinator.async_config_entry_first_refresh()
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
-    _register_child_devices(hass, entry, devices.data)
+    def sync_devices() -> None:
+        _register_child_devices(hass, entry, runtime_data.snapshot.devices)
+
+    sync_devices()
+    entry.async_on_unload(runtime_data.coordinator.async_add_listener(sync_devices))
     _cleanup_opted_out_entities(hass, entry)
-    _cleanup_stale_zone_entities(hass, entry, state.data)
+    _cleanup_stale_zone_entities(hass, entry, runtime_data.snapshot.state)
 
     reconcile_interval_s = int(
         entry.options.get(CONF_RECONCILE_INTERVAL_S, OPTIONS_DEFAULTS[CONF_RECONCILE_INTERVAL_S])
@@ -145,7 +117,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HypercolorConfigEntry) -
     if reconcile_interval_s > 0:
         runtime_data.reconcile_task = entry.async_create_background_task(
             hass,
-            reconcile_loop([state, catalog, devices], reconcile_interval_s),
+            reconcile_loop(coordinator, reconcile_interval_s),
             name="hypercolor.reconcile",
         )
     runtime_data.ws_task = entry.async_create_background_task(
@@ -167,7 +139,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: HypercolorConfigEntry) 
 
     tasks = [
         task
-        for task in (runtime.ws_task, runtime.reconcile_task, runtime.unavailable_task)
+        for task in (
+            runtime.ws_task,
+            runtime.reconcile_task,
+            runtime.coordinator.unavailable_task,
+            *runtime.refresh_tasks,
+        )
         if task is not None
     ]
     for task in tasks:
@@ -218,7 +195,7 @@ async def async_remove_config_entry_device(
 def _register_child_devices(
     hass: HomeAssistant,
     entry: HypercolorConfigEntry,
-    devices: list[Any],
+    devices: tuple[Device, ...],
 ) -> None:
     device_registry = dr.async_get(hass)
     runtime = entry.runtime_data
@@ -229,19 +206,19 @@ def _register_child_devices(
         manufacturer="Hypercolor",
         model="Daemon",
         sw_version=runtime.server.version,
-        configuration_url=(f"http://{entry.data[CONF_HOST]}:{entry.data[CONF_PORT]}"),
+        configuration_url=f"http://{entry.data[CONF_HOST]}:{entry.data[CONF_PORT]}",
     )
-    for device in devices or []:
-        device_id = str(read_field(device, "id"))
+    for device in devices:
+        device_id = device.id
         if not device_id:
             continue
         device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, child_device_identifier(runtime, device_id))},
-            name=str(read_field(device, "name", device_id)),
-            manufacturer=str(read_field(device, "vendor", "Hypercolor")),
-            model=str(read_field(device, "backend", read_field(device, "family", "LED device"))),
-            sw_version=read_field(device, "firmware_version"),
+            name=device.name,
+            manufacturer="Hypercolor",
+            model=device.backend,
+            sw_version=device.firmware_version,
             via_device=(DOMAIN, runtime.server.instance_id),
         )
 
@@ -265,28 +242,25 @@ def _cleanup_opted_out_entities(
         if suffix is None:
             continue
         device_id = registry_entry.unique_id[len(prefix) : -len(suffix)]
-        if device_id in opted_in:
-            continue
-        entity_registry.async_remove(registry_entry.entity_id)
+        if device_id not in opted_in:
+            entity_registry.async_remove(registry_entry.entity_id)
 
 
 def _cleanup_stale_zone_entities(
     hass: HomeAssistant,
     entry: HypercolorConfigEntry,
-    state: Any,
+    state: HypercolorState,
 ) -> None:
     """Prune zone lights whose zones no longer exist.
 
     Zone ids are per-scene UUIDs, so zone churn would otherwise grow the
-    registry without bound. Pruning happens at setup only — mid-session
+    registry without bound. Pruning happens at setup only; mid-session
     scene switches leave entities unavailable rather than yanking them
     out from under dashboards.
     """
     entity_registry = er.async_get(hass)
     runtime = entry.runtime_data
-    current_zone_ids = {
-        str(read_field(zone, "id")) for zone in read_field(state, "zones", []) or []
-    }
+    current_zone_ids = {zone.id for zone in state.zones}
     prefix = f"{runtime.server.instance_id}:zone:"
     for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
         if not registry_entry.unique_id.startswith(prefix):

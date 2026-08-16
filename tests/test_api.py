@@ -77,6 +77,8 @@ async def test_validate_daemon_rejects_read_only_api_key() -> None:
                     }
                 },
             )
+        if request.url.path == "/api/v1/effects":
+            return httpx.Response(200, json={"data": []})
         return httpx.Response(403, json={"error": {"code": "forbidden"}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -90,10 +92,10 @@ async def test_validate_daemon_rejects_read_only_api_key() -> None:
 
 
 async def test_validate_daemon_uses_non_mutating_control_probe() -> None:
-    requests: list[tuple[str, str, bytes]] = []
+    requests: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        requests.append((request.method, request.url.path, request.content))
+        requests.append((request.method, request.url.path))
         if request.url.path == "/api/v1/server":
             return httpx.Response(
                 200,
@@ -108,22 +110,24 @@ async def test_validate_daemon_uses_non_mutating_control_probe() -> None:
                     }
                 },
             )
-        return httpx.Response(200, json={"data": {}})
+        if request.url.path == "/api/v1/output/power":
+            return httpx.Response(200, json={"data": {"state": "running"}})
+        return httpx.Response(200, json={"data": {"checks": {}}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        await async_validate_daemon(
+        server = await async_validate_daemon(
             client,
             host="127.0.0.1",
             port=9420,
             api_key="hc_ak_control",
         )
 
-    assert [(method, path) for method, path, _ in requests] == [
+    assert server.instance_id == "srv_1"
+    assert requests == [
         ("GET", "/api/v1/server"),
         ("GET", "/api/v1/output/power"),
         ("POST", "/api/v1/diagnose"),
     ]
-    assert all(path != "/api/v1/effects/current/controls" for _, path, _ in requests)
 
 
 async def test_validate_daemon_rejects_missing_output_power_contract() -> None:
@@ -133,9 +137,12 @@ async def test_validate_daemon_rejects_missing_output_power_contract() -> None:
                 200,
                 json={
                     "data": {
-                        "instance_id": "srv_1",
-                        "instance_name": "Hyperia",
-                        "version": "0.3.1",
+                        "identity": {
+                            "instance_id": "srv_1",
+                            "instance_name": "Hyperia",
+                            "version": "0.1.0",
+                        },
+                        "auth_required": True,
                     }
                 },
             )
@@ -147,5 +154,5 @@ async def test_validate_daemon_rejects_missing_output_power_contract() -> None:
                 client,
                 host="127.0.0.1",
                 port=9420,
-                api_key=None,
+                api_key="hc_ak_control",
             )

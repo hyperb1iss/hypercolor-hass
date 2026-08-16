@@ -2,482 +2,533 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
-from hypercolor.websocket import EventMessage, HelloMessage, MetricsMessage
+from homeassistant.helpers.update_coordinator import UpdateFailed
+from hypercolor.models.system import RenderLoopStatus
+from hypercolor.websocket import EventMessage, MetricsMessage, SpectrumData
 from websockets.datastructures import Headers
 from websockets.exceptions import InvalidStatus
 from websockets.http11 import Response
 
+from custom_components.hypercolor import coordinator as coordinator_module
 from custom_components.hypercolor.coordinator import (
-    _handle_ws_message,
+    HypercolorCoordinator,
     _mark_disconnected,
     _normalize_websocket_error,
     _process_ws_message,
-    _reconcile_after_reconnect,
-    _seed_hello,
+    _websocket_channels,
+    event_requires_refresh,
     load_catalog,
+    load_snapshot,
     load_state,
 )
-from custom_components.hypercolor.runtime_data import ConnectionState
-from hypercolor import HypercolorAuthenticationError
+from custom_components.hypercolor.models import HypercolorSnapshot
+from custom_components.hypercolor.runtime_data import (
+    ConnectionSource,
+    ConnectionState,
+)
+from hypercolor import HypercolorAuthenticationError, HypercolorConnectionError
+from hypercolor.models import (
+    ActiveEffect,
+    ActiveScene,
+    AudioDevices,
+    Device,
+    EffectPreset,
+    EffectPresetOrigin,
+    EffectSummary,
+    LayoutSummary,
+    ProfileSummary,
+    Scene,
+    ServerIdentity,
+    SpatialLayout,
+    SystemState,
+)
 
 
-async def test_load_state_flattens_status_and_active_resources() -> None:
-    client = SimpleNamespace(
-        get_status=_async_value(
-            SimpleNamespace(
-                active_effect="Aurora",
-                global_brightness=66,
-                device_count=2,
-                scene_count=3,
-                render_loop={"fps": 60},
-                audio_available=True,
-            )
-        ),
-        get_active_effect=_async_value(
-            SimpleNamespace(
-                id="aurora",
-                name="Aurora",
-                state="paused",
-                active_preset_id="soft",
-                active_preset_modified=True,
-                cover_image_url="/api/v1/effects/aurora/cover",
-            )
-        ),
-        get_active_scene=_async_value(
-            SimpleNamespace(
-                id="scene-1",
-                name="Battlestation",
-                groups=[
-                    SimpleNamespace(id="zone-1", name="Desk", role="primary"),
-                    SimpleNamespace(id="zone-2", name="LCD", role="display"),
-                ],
-                groups_revision=7,
-            )
-        ),
-        get_active_layout=_async_value(SimpleNamespace(id="layout-1")),
-        get_effect=_async_value(SimpleNamespace(presets=[])),
-        active_effect_cover_image_url=lambda: (
-            "http://hyperia.test:9420/api/v1/effects/active/cover"
-        ),
-    )
+async def test_load_state_joins_active_resources_concurrently() -> None:
+    client = SnapshotClientFixture()
 
     state = await load_state(client)
 
-    assert state["active_effect"] == "Aurora"
-    assert state["active_effect_id"] == "aurora"
-    assert (
-        state["active_effect_cover_image_url"]
-        == "http://hyperia.test:9420/api/v1/effects/active/cover"
-    )
-    assert state["active_preset"] == "soft"
-    assert state["active_preset_modified"] is True
-    assert state["active_effect_state"] == "paused"
-    assert state["global_brightness"] == 66
-    assert state["active_scene"] == "scene-1"
-    assert state["active_scene_name"] == "Battlestation"
-    assert state["active_layout"] == "layout-1"
-    assert [zone.id for zone in state["zones"]] == ["zone-1", "zone-2"]
-    assert state["groups_revision"] == 7
+    assert state.active_effect_id == "aurora"
+    assert state.active_effect_name == "Aurora"
+    assert state.active_preset_id == "soft"
+    assert state.active_scene is not None
+    assert state.active_scene.id == "scene-1"
+    assert state.active_layout is not None
+    assert state.active_layout.id == "layout-1"
+    assert state.active_effect_cover_image_url is not None
+    assert state.active_effect_cover_image_url.endswith("/effects/active/cover")
+    assert client.max_in_flight == 4
 
 
-async def test_load_state_uses_client_active_cover_url() -> None:
-    client = SimpleNamespace(
-        get_status=_async_value(SimpleNamespace(active_effect="Aurora")),
-        get_active_effect=_async_value(
-            SimpleNamespace(id="aurora", name="Aurora", cover_image_url="effects/aurora/cover")
-        ),
-        get_active_scene=_async_value(None),
-        get_active_layout=_async_value(None),
-        get_effect=_async_value(SimpleNamespace(presets=[])),
-        active_effect_cover_image_url=lambda: (
-            "http://hyperia.test:9420/api/v1/effects/active/cover"
-        ),
-    )
+async def test_load_state_never_uses_display_name_as_effect_id() -> None:
+    client = SnapshotClientFixture(with_active_effect=False)
 
     state = await load_state(client)
 
-    assert (
-        state["active_effect_cover_image_url"]
-        == "http://hyperia.test:9420/api/v1/effects/active/cover"
-    )
+    assert state.active_effect_id is None
+    assert state.active_effect_name == "Aurora"
+    assert state.active_effect_cover_image_url is None
 
 
-async def test_load_catalog_gathers_home_assistant_picker_lists() -> None:
-    client = SimpleNamespace(
-        get_active_effect=_async_value(SimpleNamespace(id="aurora")),
-        get_effects=_async_value(["effect"]),
-        get_scenes=_async_value(["scene"]),
-        get_profiles=_async_value(["profile"]),
-        get_layouts=_async_value(["layout"]),
-        get_effect_presets=_async_effect_presets("aurora", ["preset"]),
-    )
-
-    catalog = await load_catalog(client)
-
-    assert catalog == {
-        "effects": ["effect"],
-        "scenes": ["scene"],
-        "profiles": ["profile"],
-        "layouts": ["layout"],
-        "preset_effect_id": "aurora",
-        "presets": ["preset"],
-    }
-
-
-async def test_load_catalog_has_empty_preset_stack_without_active_effect() -> None:
-    client = SimpleNamespace(
-        get_active_effect=_async_value(None),
-        get_effects=_async_value([]),
-        get_scenes=_async_value([]),
-        get_profiles=_async_value([]),
-        get_layouts=_async_value([]),
-    )
-
-    catalog = await load_catalog(client)
-
-    assert catalog["preset_effect_id"] is None
-    assert catalog["presets"] == []
-
-
-def test_ws_events_refresh_only_the_owning_coordinator() -> None:
-    state = _FakeCoordinator({"active_effect": "Aurora"})
-    runtime: Any = SimpleNamespace(
-        connection_state=SimpleNamespace(set_connected=lambda: False),
-        coordinators={
-            "state": state,
-            "catalog": _FakeCoordinator({}),
-            "devices": _FakeCoordinator([]),
-        },
-    )
-
-    _handle_ws_message(
-        runtime,
-        EventMessage(event="effect_degraded", timestamp="now", data={"state": "failed"}),
-        {},
-    )
-
-    assert state.data == {"active_effect": "Aurora"}
-    assert state.hass.scheduled == 1
-    assert runtime.coordinators["catalog"].hass.scheduled == 0
-    assert runtime.coordinators["devices"].hass.scheduled == 0
-
-
-def test_ws_effect_switch_refreshes_state_and_effect_scoped_presets() -> None:
-    runtime: Any = SimpleNamespace(
-        connection_state=SimpleNamespace(set_connected=lambda: False),
-        coordinators={
-            "state": _FakeCoordinator({}),
-            "catalog": _FakeCoordinator({}),
-            "devices": _FakeCoordinator([]),
-        },
-    )
-
-    _handle_ws_message(
-        runtime,
-        EventMessage(event="effect_started", timestamp="now", data={"effect": "Aurora"}),
-        {},
-    )
-
-    assert runtime.coordinators["state"].hass.scheduled == 1
-    assert runtime.coordinators["catalog"].hass.scheduled == 1
-    assert runtime.coordinators["devices"].hass.scheduled == 0
-
-
-def test_ws_pause_resume_and_brightness_patch_state_without_http_refresh() -> None:
-    state = _FakeCoordinator({"active_effect": "Aurora", "active_effect_state": "running"})
-    runtime: Any = SimpleNamespace(
-        connection_state=SimpleNamespace(set_connected=lambda: False),
-        coordinators={"state": state},
-    )
-
-    _handle_ws_message(runtime, EventMessage(event="paused", timestamp="now", data={}), {})
-    assert state.data["active_effect_state"] == "paused"
-
-    _handle_ws_message(
-        runtime,
-        EventMessage(event="brightness_changed", timestamp="now", data={"new_value": 42}),
-        {},
-    )
-    assert state.data["global_brightness"] == 42
-    assert state.hass.scheduled == 0
-
-    _handle_ws_message(runtime, EventMessage(event="resumed", timestamp="now", data={}), {})
-    assert state.data["active_effect_state"] == "running"
-
-
-def test_ws_resync_hint_refreshes_every_coordinator() -> None:
-    runtime: Any = SimpleNamespace(
-        connection_state=SimpleNamespace(set_connected=lambda: False),
-        coordinators={
-            name: _FakeCoordinator({})
-            for name in ("state", "catalog", "devices", "metrics", "audio")
-        },
-    )
-
-    _handle_ws_message(
-        runtime,
-        EventMessage(
-            event="resync_required",
-            timestamp="now",
-            data={"dropped_events": 17},
+async def test_load_catalog_builds_unique_picker_indexes_concurrently() -> None:
+    client = SnapshotClientFixture()
+    client.effects = [
+        _effect("aurora-v1", "Aurora"),
+        _effect("aurora-v2", "Aurora"),
+    ]
+    client.presets = [
+        EffectPreset(
+            id="soft-bundled",
+            name="Soft",
+            effect_id="aurora",
+            origin=EffectPresetOrigin.BUNDLED,
+            editable=False,
         ),
-        {},
+        EffectPreset(
+            id="soft-saved",
+            name="Soft",
+            effect_id="aurora",
+            origin=EffectPresetOrigin.SAVED,
+            editable=True,
+        ),
+    ]
+
+    catalog = await load_catalog(client)
+
+    assert catalog.effects.options == ["Aurora (aurora-v1)", "Aurora (aurora-v2)"]
+    assert catalog.effects.resolve("Aurora (aurora-v2)") == "aurora-v2"
+    assert catalog.preset_effect_id == "aurora"
+    assert catalog.presets.options == ["Soft (Built-in)", "Soft (Saved)"]
+    assert client.max_in_flight == 5
+
+
+async def test_snapshot_hides_preset_stack_from_a_newer_effect() -> None:
+    client = SnapshotClientFixture()
+    state = await load_state(client)
+    client.active_effect = ActiveEffect(id="rainbow", name="Rainbow", state="running")
+    client.presets = []
+
+    catalog = await load_catalog(client)
+    snapshot = HypercolorSnapshot(state=state, catalog=catalog, devices=())
+
+    assert catalog.preset_effect_id == "rainbow"
+    assert state.active_effect_id == "aurora"
+    assert snapshot.active_effect_presets.items == ()
+
+
+async def test_rest_refresh_preserves_websocket_telemetry() -> None:
+    client = SnapshotClientFixture()
+    initial = await load_snapshot(client, load_audio=True)
+    spectrum = SpectrumData(
+        timestamp_ms=123,
+        bin_count=2,
+        level=0.8,
+        bass=0.7,
+        mid=0.4,
+        treble=0.2,
+        beat=True,
+        beat_confidence=0.9,
+        bins=[0.7, 0.2],
+    )
+    streamed = initial.with_metrics({"fps": {"actual": 59.8}}).with_spectrum(
+        spectrum,
+        42.0,
     )
 
-    assert all(coordinator.hass.scheduled == 1 for coordinator in runtime.coordinators.values())
+    refreshed = await load_snapshot(client, load_audio=True, previous=streamed)
+
+    assert refreshed.metrics == {"fps": {"actual": 59.8}}
+    assert refreshed.audio.devices == client.audio_devices
+    assert refreshed.audio.spectrum is spectrum
+    assert refreshed.audio.beat_until == 42.0
 
 
-async def test_ws_resync_is_a_barrier_before_newer_events() -> None:
-    release_refresh = asyncio.Event()
-    refresh_started = asyncio.Event()
-    state = _BarrierCoordinator(release_refresh, refresh_started)
+def test_event_refresh_filter_covers_state_bearing_daemon_taxonomy() -> None:
+    for event in (
+        "device_error",
+        "effect_degraded",
+        "control_surface_changed",
+        "scene_enabled",
+        "layer_stack_changed",
+        "audio_source_changed",
+        "profile_loaded",
+        "asset_changed",
+        "layout_updated",
+        "config_changed",
+    ):
+        assert event_requires_refresh(event) is True
+
+    for event in (
+        "audio_level_update",
+        "beat_detected",
+        "device_metrics",
+        "frame_rendered",
+        "future_unknown",
+    ):
+        assert event_requires_refresh(event) is False
+
+
+def test_websocket_channels_intersect_daemon_capabilities() -> None:
+    options = {"channels.metrics": True, "channels.audio": True}
+
+    assert _websocket_channels(options, capabilities={"events", "metrics"}) == [
+        "events",
+        "metrics",
+    ]
+
+
+async def test_ws_resync_is_a_barrier_before_newer_state() -> None:
+    order: list[str] = []
+
+    async def prior_refresh() -> None:
+        await asyncio.sleep(0)
+        order.append("prior")
+
+    class Coordinator:
+        async def async_request_refresh(self) -> None:
+            order.append("resync")
+
+    task = asyncio.create_task(prior_refresh())
     runtime: Any = SimpleNamespace(
-        connection_state=SimpleNamespace(set_connected=lambda: False),
-        coordinators={"state": state},
-    )
-    resync = EventMessage(
-        event="resync_required",
-        timestamp="now",
-        data={"dropped_events": 1},
+        coordinator=Coordinator(),
+        refresh_tasks={task},
     )
 
-    barrier = asyncio.create_task(_process_ws_message(runtime, resync, {}))
-    await refresh_started.wait()
-
-    assert not barrier.done()
-    release_refresh.set()
-    await barrier
     await _process_ws_message(
         runtime,
-        EventMessage(event="resumed", timestamp="now", data={}),
+        EventMessage(event="resync_required", timestamp="", data={}),
         {},
     )
 
-    assert state.data["active_effect_state"] == "running"
-
-
-def test_ws_catalog_audio_and_device_events_are_targeted() -> None:
-    runtime: Any = SimpleNamespace(
-        connection_state=SimpleNamespace(set_connected=lambda: False),
-        coordinators={
-            name: _FakeCoordinator({} if name != "devices" else [])
-            for name in ("state", "catalog", "devices", "audio")
-        },
-    )
-
-    _handle_ws_message(
-        runtime,
-        EventMessage(event="library_store_changed", timestamp="now", data={}),
-        {},
-    )
-    assert runtime.coordinators["catalog"].hass.scheduled == 1
-    assert runtime.coordinators["state"].hass.scheduled == 0
-
-    _handle_ws_message(
-        runtime,
-        EventMessage(event="audio_source_changed", timestamp="now", data={}),
-        {},
-    )
-    assert runtime.coordinators["audio"].hass.scheduled == 1
-    assert runtime.coordinators["state"].hass.scheduled == 1
-
-    _handle_ws_message(
-        runtime,
-        EventMessage(event="device_connected", timestamp="now", data={}),
-        {},
-    )
-    assert runtime.coordinators["devices"].hass.scheduled == 1
-
-    _handle_ws_message(
-        runtime,
-        EventMessage(event="control_surface_changed", timestamp="now", data={}),
-        {},
-    )
-    assert runtime.coordinators["devices"].hass.scheduled == 2
-
-
-def test_ws_metrics_keep_nested_daemon_schema() -> None:
-    metrics = _FakeCoordinator({})
-    runtime: Any = SimpleNamespace(
-        connection_state=SimpleNamespace(set_connected=lambda: False),
-        coordinators={"metrics": metrics},
-    )
-
-    _handle_ws_message(
-        runtime,
-        MetricsMessage(
-            timestamp="now",
-            data={"fps": {"actual": 58.5}, "frame_time": {"avg_ms": 4.2}},
-        ),
-        {},
-    )
-
-    assert metrics.data["fps"]["actual"] == 58.5
-    assert metrics.data["frame_time"]["avg_ms"] == 4.2
-
-
-def test_ws_preset_library_event_refreshes_catalog_and_state() -> None:
-    runtime: Any = SimpleNamespace(
-        connection_state=SimpleNamespace(set_connected=lambda: False),
-        coordinators={
-            "state": _FakeCoordinator({}),
-            "catalog": _FakeCoordinator({}),
-        },
-    )
-
-    _handle_ws_message(
-        runtime,
-        EventMessage(
-            event="library_store_changed",
-            timestamp="now",
-            data={"collection": "presets", "kind": "updated"},
-        ),
-        {},
-    )
-
-    assert runtime.coordinators["catalog"].hass.scheduled == 1
-    assert runtime.coordinators["state"].hass.scheduled == 1
-
-
-def test_ws_hello_patches_canonical_state_and_metrics_fields() -> None:
-    state = _FakeCoordinator(
-        {"active_effect": "Old", "active_effect_id": "old", "active_effect_state": "running"}
-    )
-    metrics = _FakeCoordinator({})
-    runtime: Any = SimpleNamespace(coordinators={"state": state, "metrics": metrics})
-
-    _seed_hello(
-        runtime,
-        HelloMessage(
-            version="1",
-            state={
-                "paused": True,
-                "brightness": 42,
-                "effect": {"id": "aurora", "name": "Aurora"},
-                "scene": {"id": "scene-1", "name": "Desk"},
-                "device_count": 3,
-                "fps": {"actual": 58.5, "target": 60},
-            },
-            capabilities=[],
-            subscriptions=[],
-        ),
-    )
-
-    assert state.data["active_effect_state"] == "paused"
-    assert state.data["global_brightness"] == 42
-    assert state.data["active_effect_id"] == "aurora"
-    assert state.data["active_scene"] == "scene-1"
-    assert state.data["device_count"] == 3
-    assert metrics.data["fps"]["actual"] == 58.5
+    assert order == ["prior", "resync"]
 
 
 def test_ws_rejected_handshake_is_typed_as_authentication_failure() -> None:
-    response = Response(401, "Unauthorized", Headers())
-
+    response = Response(401, "Unauthorized", Headers(), b"")
     error = _normalize_websocket_error(InvalidStatus(response))
 
     assert isinstance(error, HypercolorAuthenticationError)
-    assert error.status_code == 401
 
 
-async def test_websocket_disconnect_marks_all_coordinators_unavailable_after_threshold(
-    monkeypatch: Any,
+async def test_websocket_disconnect_creates_unavailable_issue_after_threshold(
+    monkeypatch,
 ) -> None:
     created_issues: list[str] = []
     monkeypatch.setattr(
-        "custom_components.hypercolor.coordinator.async_create_unavailable_issue",
+        coordinator_module,
+        "async_create_unavailable_issue",
         lambda _hass, entry_id: created_issues.append(entry_id),
     )
-    hass = SimpleNamespace(async_create_task=asyncio.create_task)
-    state: Any = _FakeCoordinator({})
-    state.hass = hass
-    state.config_entry = SimpleNamespace(entry_id="entry-1")
-    catalog = _FakeCoordinator({})
-    runtime: Any = SimpleNamespace(
-        connection_state=ConnectionState(connected=True),
-        coordinators={"state": state, "catalog": catalog},
-        unavailable_task=None,
+    monkeypatch.setattr(
+        coordinator_module,
+        "async_delete_unavailable_issue",
+        lambda _hass, _entry_id: None,
     )
+    state = ConnectionState()
+    state.set_connected(ConnectionSource.SNAPSHOT)
+    state.set_connected(ConnectionSource.WEBSOCKET)
+    coordinator = _repair_coordinator(state, unavailable_after_s=0)
+    runtime: Any = SimpleNamespace(connection_state=state, coordinator=coordinator)
 
-    _mark_disconnected(runtime, {"unavailable_after_s": 0}, ConnectionError("offline"))
-    await runtime.unavailable_task
+    _mark_disconnected(runtime, ConnectionError("offline"))
 
-    assert isinstance(state.update_error, ConnectionError)
-    assert isinstance(catalog.update_error, ConnectionError)
+    assert state.is_available(0) is False
     assert created_issues == ["entry-1"]
 
 
-async def test_reconnect_reconciliation_does_not_swallow_refresh_failures() -> None:
-    coordinator = _RetryCoordinator()
-    runtime: Any = SimpleNamespace(coordinators={"state": coordinator})
+async def test_sdk_failure_waits_for_shared_unavailable_deadline(monkeypatch) -> None:
+    created_issues: list[str] = []
+    monkeypatch.setattr(
+        coordinator_module,
+        "async_create_unavailable_issue",
+        lambda _hass, entry_id: created_issues.append(entry_id),
+    )
+    monkeypatch.setattr(
+        coordinator_module,
+        "async_delete_unavailable_issue",
+        lambda _hass, _entry_id: None,
+    )
+    state = ConnectionState()
+    state.set_connected(ConnectionSource.SNAPSHOT)
+    coordinator = _repair_coordinator(state, unavailable_after_s=30)
 
-    with pytest.raises(ConnectionError, match="retry me"):
-        await _reconcile_after_reconnect(runtime, {})
-    await _reconcile_after_reconnect(runtime, {})
+    async def fail(_previous: HypercolorSnapshot | None) -> HypercolorSnapshot:
+        raise HypercolorConnectionError("offline")
 
-    assert coordinator.calls == 2
+    coordinator._loader = fail
+    cast(Any, coordinator).data = None
+
+    with pytest.raises(UpdateFailed, match="Failed to refresh Hypercolor snapshot"):
+        await coordinator._async_update_data()
+
+    assert state.is_available(30) is True
+    assert created_issues == []
+    assert coordinator.unavailable_task is not None
+
+    unavailable_task = coordinator.unavailable_task
+    coordinator.mark_connected(ConnectionSource.SNAPSHOT)
+    await asyncio.gather(unavailable_task, return_exceptions=True)
+
+    assert coordinator.unavailable_task is None
+    assert created_issues == []
 
 
-def _async_value(value: object):
-    async def _loader(*_args: object) -> object:
+async def test_unexpected_loader_bug_does_not_poison_connection_health() -> None:
+    state = ConnectionState()
+    state.set_connected(ConnectionSource.SNAPSHOT)
+    coordinator = _repair_coordinator(state, unavailable_after_s=30)
+
+    async def fail(_previous: HypercolorSnapshot | None) -> HypercolorSnapshot:
+        raise TypeError("integration bug")
+
+    coordinator._loader = fail
+    cast(Any, coordinator).data = None
+
+    with pytest.raises(TypeError, match="integration bug"):
+        await coordinator._async_update_data()
+
+    assert state.is_source_connected(ConnectionSource.SNAPSHOT) is True
+    assert coordinator.unavailable_task is None
+
+
+def test_healthy_push_does_not_resync_repair_registry(monkeypatch) -> None:
+    deleted_issues: list[str] = []
+    monkeypatch.setattr(
+        coordinator_module,
+        "async_delete_unavailable_issue",
+        lambda _hass, entry_id: deleted_issues.append(entry_id),
+    )
+    state = ConnectionState()
+    state.set_connected(ConnectionSource.SNAPSHOT)
+    coordinator = _repair_coordinator(state, unavailable_after_s=30)
+
+    coordinator.mark_connected(ConnectionSource.WEBSOCKET)
+    coordinator.mark_connected(ConnectionSource.WEBSOCKET)
+
+    assert deleted_issues == ["entry-1"]
+
+
+async def test_websocket_messages_preserve_typed_push_telemetry(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        coordinator_module,
+        "async_delete_unavailable_issue",
+        lambda _hass, _entry_id: None,
+    )
+    coordinator = _PushCoordinator(await load_snapshot(SnapshotClientFixture(), load_audio=True))
+    runtime: Any = _PushRuntime(coordinator)
+
+    await _process_ws_message(
+        runtime,
+        MetricsMessage(
+            timestamp="2026-08-12T00:00:00Z",
+            data={
+                "fps": {"actual": 59.8},
+                "frame_time": {"avg_ms": 16.7},
+                "queue_depth": 2,
+            },
+        ),
+        {},
+    )
+    spectrum = SpectrumData(
+        timestamp_ms=123,
+        bin_count=2,
+        level=0.8,
+        bass=0.7,
+        mid=0.4,
+        treble=0.2,
+        beat=True,
+        beat_confidence=0.9,
+        bins=[0.7, 0.2],
+    )
+    await _process_ws_message(runtime, spectrum, {"audio_beat_hold_ms": 200})
+    await _process_ws_message(
+        runtime,
+        EventMessage(event="effect_started", timestamp="", data={}),
+        {},
+    )
+    await coordinator.refreshed.wait()
+
+    assert coordinator.data.metrics == {
+        "fps": {"actual": 59.8},
+        "frame_time": {"avg_ms": 16.7},
+        "queue_depth": 2,
+    }
+    assert coordinator.data.audio.spectrum is spectrum
+    assert coordinator.data.audio.beat_until is not None
+    assert runtime.connection_state.is_source_connected(ConnectionSource.WEBSOCKET)
+    assert coordinator.refreshes == 1
+
+
+class SnapshotClientFixture:
+    def __init__(self, *, with_active_effect: bool = True) -> None:
+        self.status = _status()
+        self.active_effect = (
+            ActiveEffect(
+                id="aurora",
+                name="Aurora",
+                state="running",
+                active_preset_id="soft",
+                cover_image_url="/api/v1/effects/aurora/cover",
+            )
+            if with_active_effect
+            else None
+        )
+        self.active_scene = ActiveScene(id="scene-1", name="Battlestation")
+        self.active_layout = SpatialLayout(
+            id="layout-1",
+            name="Desk",
+            canvas_width=640,
+            canvas_height=480,
+        )
+        self.effects = [_effect("aurora", "Aurora")]
+        self.scenes = [Scene(id="scene-1", name="Battlestation")]
+        self.profiles = [ProfileSummary(id="profile-1", name="Default")]
+        self.layouts = [
+            LayoutSummary(id="layout-1", name="Desk", canvas_width=640, canvas_height=480)
+        ]
+        self.presets = [
+            EffectPreset(
+                id="soft",
+                name="Soft",
+                effect_id="aurora",
+                origin=EffectPresetOrigin.BUNDLED,
+                editable=False,
+            )
+        ]
+        self.audio_devices = AudioDevices(current="none")
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def get_status(self) -> SystemState:
+        return await self._load(self.status)
+
+    async def get_active_effect(self) -> ActiveEffect | None:
+        return await self._load(self.active_effect)
+
+    async def get_active_scene(self) -> ActiveScene | None:
+        return await self._load(self.active_scene)
+
+    async def get_active_layout(self) -> SpatialLayout | None:
+        return await self._load(self.active_layout)
+
+    async def get_effects(self) -> list[EffectSummary]:
+        return await self._load(self.effects)
+
+    async def get_scenes(self) -> list[Scene]:
+        return await self._load(self.scenes)
+
+    async def get_profiles(self) -> list[ProfileSummary]:
+        return await self._load(self.profiles)
+
+    async def get_layouts(self) -> list[LayoutSummary]:
+        return await self._load(self.layouts)
+
+    async def get_effect_presets(self, effect_id: str) -> list[EffectPreset]:
+        assert self.active_effect is not None
+        assert effect_id == self.active_effect.id
+        return await self._load(self.presets)
+
+    async def get_devices(self) -> list[Device]:
+        return await self._load([])
+
+    async def get_audio_devices(self) -> AudioDevices:
+        return await self._load(self.audio_devices)
+
+    def active_effect_cover_image_url(self) -> str:
+        return "http://hyperia.test:9420/api/v1/effects/active/cover"
+
+    async def _load[ValueT](self, value: ValueT) -> ValueT:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        await asyncio.sleep(0)
+        self.in_flight -= 1
         return value
 
-    return _loader
 
+class _PushCoordinator:
+    def __init__(self, data: HypercolorSnapshot) -> None:
+        self.data = data
+        self.hass = SimpleNamespace(async_create_task=asyncio.create_task)
+        self.config_entry = SimpleNamespace(entry_id="entry-1", options={})
+        self.refreshed = asyncio.Event()
+        self.refreshes = 0
+        self.connection_state = ConnectionState()
 
-def _async_effect_presets(expected_effect_id: str, value: object):
-    async def _loader(effect_id: str) -> object:
-        assert effect_id == expected_effect_id
-        return value
-
-    return _loader
-
-
-class _FakeHass:
-    def __init__(self) -> None:
-        self.scheduled = 0
-
-    def async_create_task(self, coro: Any) -> None:
-        self.scheduled += 1
-        coro.close()
-
-
-class _FakeCoordinator:
-    def __init__(self, data: Any) -> None:
-        self.data: Any = data
-        self.hass = _FakeHass()
-        self.update_error: BaseException | None = None
-
-    async def async_request_refresh(self) -> None:
-        return None
-
-    def async_set_updated_data(self, data: Any) -> None:
+    def async_set_updated_data(self, data: HypercolorSnapshot) -> None:
         self.data = data
 
-    def async_set_update_error(self, error: BaseException) -> None:
-        self.update_error = error
-
-
-class _BarrierCoordinator(_FakeCoordinator):
-    def __init__(self, release_refresh: asyncio.Event, refresh_started: asyncio.Event) -> None:
-        super().__init__({"active_effect_state": "running"})
-        self._release_refresh = release_refresh
-        self._refresh_started = refresh_started
-
     async def async_request_refresh(self) -> None:
-        self._refresh_started.set()
-        await self._release_refresh.wait()
-        self.data = {"active_effect_state": "paused"}
+        self.refreshes += 1
+        self.refreshed.set()
+
+    def mark_connected(self, source: ConnectionSource) -> None:
+        self.connection_state.set_connected(source)
 
 
-class _RetryCoordinator:
-    def __init__(self) -> None:
-        self.calls = 0
+class _PushRuntime:
+    def __init__(self, coordinator: _PushCoordinator) -> None:
+        self.coordinator = coordinator
+        self.connection_state = coordinator.connection_state
+        self.refresh_tasks: set[asyncio.Task[None]] = set()
 
-    async def async_request_refresh(self) -> None:
-        self.calls += 1
-        if self.calls == 1:
-            raise ConnectionError("retry me")
+    @property
+    def snapshot(self) -> HypercolorSnapshot:
+        return self.coordinator.data
+
+
+def _repair_coordinator(
+    state: ConnectionState,
+    *,
+    unavailable_after_s: int,
+) -> HypercolorCoordinator:
+    coordinator = object.__new__(HypercolorCoordinator)
+    coordinator.hass = SimpleNamespace(async_create_task=asyncio.create_task)
+    coordinator.config_entry = SimpleNamespace(
+        entry_id="entry-1",
+        options={"unavailable_after_s": unavailable_after_s},
+    )
+    coordinator._connection_state = state
+    coordinator.unavailable_task = None
+    return coordinator
+
+
+def _status() -> SystemState:
+    return SystemState(
+        running=True,
+        version="0.3.1",
+        server=ServerIdentity(instance_id="srv-1", instance_name="Hyperia", version="0.3.1"),
+        config_path="/config",
+        data_dir="/data",
+        cache_dir="/cache",
+        uptime_seconds=12,
+        device_count=2,
+        effect_count=3,
+        scene_count=1,
+        global_brightness=66,
+        audio_available=True,
+        capture_available=False,
+        render_loop=RenderLoopStatus(state="running", fps_tier="full", total_frames=10),
+        event_bus_subscribers=1,
+        active_effect="Aurora",
+    )
+
+
+def _effect(effect_id: str, name: str) -> EffectSummary:
+    return EffectSummary(
+        id=effect_id,
+        name=name,
+        description="Cascading neon",
+        author="Aurora Labs",
+        category="ambient",
+        source="builtin",
+        runnable=True,
+        version="1.2.0",
+        audio_reactive=True,
+        tags=["cyberpunk", "rain"],
+    )

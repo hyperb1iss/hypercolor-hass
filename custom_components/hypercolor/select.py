@@ -1,26 +1,22 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Literal
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from hypercolor.models import EffectPreset, LayoutSummary, ProfileSummary, Scene
 
 from .const import CONF_CHANNELS_AUDIO
-from .entity import (
-    MultiCoordinatorEntity,
-    catalog_items,
-    hub_device_info,
-    item_id,
-    item_name,
-    option_map,
-    read_field,
-)
+from .entity import HypercolorEntity, hub_device_info
+from .models import CatalogIndex
 from .runtime_data import HypercolorRuntimeData
+
+type CatalogKind = Literal["scenes", "profiles", "layouts"]
+type SelectIndex = CatalogIndex[Scene] | CatalogIndex[ProfileSummary] | CatalogIndex[LayoutSummary]
 
 
 async def async_setup_entry(
@@ -31,26 +27,23 @@ async def async_setup_entry(
     entities: list[SelectEntity] = [
         HypercolorCatalogSelect(
             entry,
-            key="scenes",
+            kind="scenes",
             name="Scene",
             unique_suffix="scene",
-            active_key="active_scene",
             action=entry.runtime_data.client.activate_scene,
         ),
         HypercolorCatalogSelect(
             entry,
-            key="profiles",
+            kind="profiles",
             name="Profile",
             unique_suffix="profile",
-            active_key=None,
             action=entry.runtime_data.client.apply_profile,
         ),
         HypercolorCatalogSelect(
             entry,
-            key="layouts",
+            kind="layouts",
             name="Layout",
             unique_suffix="layout",
-            active_key="active_layout",
             action=entry.runtime_data.client.apply_layout,
         ),
         HypercolorPresetSelect(entry),
@@ -60,25 +53,21 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class HypercolorCatalogSelect(MultiCoordinatorEntity, SelectEntity):
+class HypercolorCatalogSelect(HypercolorEntity, SelectEntity):
     _attr_has_entity_name = True
 
     def __init__(
         self,
         entry: ConfigEntry[HypercolorRuntimeData],
         *,
-        key: str,
+        kind: CatalogKind,
         name: str,
         unique_suffix: str,
-        active_key: str | None,
-        action: Callable[[str], Awaitable[Any]],
+        action: Callable[[str], Awaitable[object]],
     ) -> None:
+        super().__init__(entry)
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["catalog"], runtime.coordinators["state"])
-        self._entry = entry
-        self._state = runtime.coordinators["state"]
-        self._key = key
-        self._active_key = active_key
+        self._kind = kind
         self._action = action
         self._attr_name = name
         self._attr_device_info = hub_device_info(runtime, entry.data)
@@ -86,145 +75,92 @@ class HypercolorCatalogSelect(MultiCoordinatorEntity, SelectEntity):
 
     @property
     def options(self) -> list[str]:
-        return list(option_map(self._items))
+        return self._index.options
 
     @property
     def current_option(self) -> str | None:
-        if self._active_key is None:
+        state = self.snapshot.state
+        if self._kind == "scenes":
+            active_id = state.active_scene.id if state.active_scene is not None else None
+        elif self._kind == "layouts":
+            active_id = state.active_layout.id if state.active_layout is not None else None
+        else:
             return None
-        active_id = read_field(self._state.data, self._active_key)
-        if not active_id:
-            return None
-        return next(
-            (
-                option
-                for option, identifier in option_map(self._items).items()
-                if identifier == str(active_id)
-            ),
-            None,
-        )
+        return self._index.label(active_id)
 
     async def async_select_option(self, option: str) -> None:
-        mapping = option_map(self._items)
-        await self._action(mapping.get(option, option))
-        await self._state.async_request_refresh()
-        await self.coordinator.async_request_refresh()
+        selected_id = self._index.resolve(option)
+        await self._runtime.async_mutate(lambda: self._action(selected_id))
 
     @property
-    def _items(self) -> list[Any]:
-        return catalog_items(self.coordinator.data, self._key)
+    def _index(self) -> SelectIndex:
+        catalog = self.snapshot.catalog
+        if self._kind == "scenes":
+            return catalog.scenes
+        if self._kind == "profiles":
+            return catalog.profiles
+        if self._kind == "layouts":
+            return catalog.layouts
+        raise AssertionError(self._kind)
 
 
-class HypercolorPresetSelect(MultiCoordinatorEntity, SelectEntity):
+class HypercolorPresetSelect(HypercolorEntity, SelectEntity):
     _attr_has_entity_name = True
     _attr_name = "Preset"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
+        super().__init__(entry)
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["catalog"], runtime.coordinators["state"])
-        self._entry = entry
-        self._state = runtime.coordinators["state"]
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:preset"
 
     @property
     def options(self) -> list[str]:
-        return list(_preset_option_map(self._items))
+        return self._index.options
 
     @property
     def current_option(self) -> str | None:
-        active_id = read_field(self._state.data, "active_preset")
-        if not active_id:
-            return None
-        for option, preset in _preset_option_map(self._items).items():
-            if item_id(preset) == str(active_id):
-                return option
-        return None
+        return self._index.label(self.snapshot.state.active_preset_id)
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        return {
-            "active_preset_modified": bool(
-                read_field(self._state.data, "active_preset_modified", False)
-            )
-        }
+    def extra_state_attributes(self) -> dict[str, bool]:
+        return {"active_preset_modified": self.snapshot.state.active_preset_modified}
 
     async def async_select_option(self, option: str) -> None:
-        preset = _preset_option_map(self._items).get(option)
-        if preset is None:
-            return
-        await self._entry.runtime_data.client.apply_effect_preset(
-            str(read_field(preset, "effect_id")),
-            item_id(preset),
-        )
-        await asyncio.gather(
-            self._state.async_refresh(),
-            self.coordinator.async_refresh(),
+        preset = self._index.by_id[self._index.resolve(option)]
+        await self._runtime.async_mutate(
+            lambda: self._runtime.client.apply_effect_preset(preset.effect_id, preset.id)
         )
 
     @property
-    def _items(self) -> list[Any]:
-        catalog_effect_id = read_field(self.coordinator.data, "preset_effect_id")
-        active_effect_id = read_field(self._state.data, "active_effect_id")
-        if not catalog_effect_id or str(catalog_effect_id) != str(active_effect_id):
-            return []
-        return catalog_items(self.coordinator.data, "presets")
+    def _index(self) -> CatalogIndex[EffectPreset]:
+        return self.snapshot.active_effect_presets
 
 
-def _preset_option_map(items: list[Any]) -> dict[str, Any]:
-    counts: dict[str, int] = {}
-    for item in items:
-        name = item_name(item)
-        counts[name] = counts.get(name, 0) + 1
-
-    options: dict[str, Any] = {}
-    for item in items:
-        name = item_name(item)
-        option = name
-        if counts[name] > 1:
-            origin = read_field(item, "origin")
-            origin_value = str(getattr(origin, "value", origin))
-            label = "Built-in" if origin_value == "bundled" else "Saved"
-            option = f"{name} ({label})"
-        if option in options:
-            option = f"{option} [{item_id(item)[:8]}]"
-        options[option] = item
-    return options
-
-
-class HypercolorAudioDeviceSelect(CoordinatorEntity, SelectEntity):
+class HypercolorAudioDeviceSelect(HypercolorEntity, SelectEntity):
     _attr_has_entity_name = True
     _attr_name = "Audio device"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
+        super().__init__(entry)
         runtime = entry.runtime_data
-        super().__init__(runtime.coordinators["audio"])
-        self._entry = entry
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:audio_device"
 
     @property
     def options(self) -> list[str]:
-        return list(option_map(self._devices))
+        return self._index.options
 
     @property
     def current_option(self) -> str | None:
-        current = read_field(read_field(self.coordinator.data, "devices"), "current")
-        return next(
-            (
-                option
-                for option, identifier in option_map(self._devices).items()
-                if identifier == current
-            ),
-            None,
-        )
+        devices = self.snapshot.audio.devices
+        return self._index.label(devices.current) if devices is not None else None
 
     async def async_select_option(self, option: str) -> None:
-        mapping = option_map(self._devices)
-        await self._entry.runtime_data.client.set_audio_device(mapping.get(option, option))
-        await self.coordinator.async_request_refresh()
+        device_id = self._index.resolve(option)
+        await self._runtime.async_mutate(lambda: self._runtime.client.set_audio_device(device_id))
 
     @property
-    def _devices(self) -> list[Any]:
-        devices = read_field(read_field(self.coordinator.data, "devices"), "devices", [])
-        return list(devices) if isinstance(devices, list) else []
+    def _index(self):
+        devices = self.snapshot.audio.devices
+        return CatalogIndex.build(devices.devices if devices is not None else ())
