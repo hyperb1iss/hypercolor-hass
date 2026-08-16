@@ -28,16 +28,16 @@ async def async_setup_entry(
     entities: list[ButtonEntity] = [
         HypercolorActionButton(
             entry,
-            name="Discover devices",
+            translation_key="discover_devices",
             unique_suffix="discover_devices",
             action=lambda: runtime.async_mutate(runtime.client.discover_devices),
         ),
-        HypercolorEffectNavigationButton(entry, "Previous effect", "previous_effect", -1),
-        HypercolorEffectNavigationButton(entry, "Next effect", "next_effect", 1),
-        HypercolorEffectNavigationButton(entry, "Random effect", "random_effect", 0),
+        HypercolorEffectNavigationButton(entry, "previous_effect", -1),
+        HypercolorEffectNavigationButton(entry, "next_effect", 1),
+        HypercolorEffectNavigationButton(entry, "random_effect", 0),
         HypercolorActionButton(
             entry,
-            name="Stop effect",
+            translation_key="stop_effect",
             unique_suffix="stop_effect",
             action=runtime.async_stop_effect,
         ),
@@ -53,14 +53,14 @@ class HypercolorActionButton(HypercolorEntity, ButtonEntity):
         self,
         entry: ConfigEntry[HypercolorRuntimeData],
         *,
-        name: str,
+        translation_key: str,
         unique_suffix: str,
         action: Callable[[], Awaitable[object]],
     ) -> None:
         super().__init__(entry)
         runtime = entry.runtime_data
         self._action = action
-        self._attr_name = name
+        self._attr_translation_key = translation_key
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:{unique_suffix}"
 
@@ -74,16 +74,15 @@ class HypercolorEffectNavigationButton(HypercolorEntity, ButtonEntity):
     def __init__(
         self,
         entry: ConfigEntry[HypercolorRuntimeData],
-        name: str,
-        unique_suffix: str,
+        translation_key: str,
         step: int,
     ) -> None:
         super().__init__(entry)
         runtime = entry.runtime_data
         self._step = step
-        self._attr_name = name
+        self._attr_translation_key = translation_key
         self._attr_device_info = hub_device_info(runtime, entry.data)
-        self._attr_unique_id = f"{runtime.server.instance_id}:{unique_suffix}"
+        self._attr_unique_id = f"{runtime.server.instance_id}:{translation_key}"
 
     async def async_press(self) -> None:
         effects = self.snapshot.catalog.effects.items
@@ -103,7 +102,7 @@ class HypercolorEffectNavigationButton(HypercolorEntity, ButtonEntity):
 
 class HypercolorIdentifyDeviceButton(HypercolorDeviceEntity, ButtonEntity):
     _attr_has_entity_name = True
-    _attr_name = "Identify"
+    _attr_translation_key = "identify"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], device: Device) -> None:
         super().__init__(entry, device)

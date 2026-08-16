@@ -36,7 +36,7 @@ async def async_setup_entry(
 
 class HypercolorAudioReactiveSwitch(HypercolorEntity, SwitchEntity):
     _attr_has_entity_name = True
-    _attr_name = "Audio reactive"
+    _attr_translation_key = "audio_reactive"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
         super().__init__(entry)
@@ -62,7 +62,7 @@ class HypercolorAudioReactiveSwitch(HypercolorEntity, SwitchEntity):
 
 class HypercolorDeviceEnabledSwitch(HypercolorDeviceEntity, SwitchEntity):
     _attr_has_entity_name = True
-    _attr_name = "Enabled"
+    _attr_translation_key = "enabled"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], device: Device) -> None:
         super().__init__(entry, device)

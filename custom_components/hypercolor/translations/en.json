@@ -57,11 +57,85 @@
     "binary_sensor": {
       "connected": {
         "name": "Connected"
+      },
+      "audio_beat": {
+        "name": "Audio beat"
+      },
+      "audio_reactive_active": {
+        "name": "Audio reactive active"
+      }
+    },
+    "button": {
+      "discover_devices": {
+        "name": "Discover devices"
+      },
+      "previous_effect": {
+        "name": "Previous effect"
+      },
+      "next_effect": {
+        "name": "Next effect"
+      },
+      "random_effect": {
+        "name": "Random effect"
+      },
+      "stop_effect": {
+        "name": "Stop effect"
+      },
+      "identify": {
+        "name": "Identify"
+      }
+    },
+    "number": {
+      "brightness": {
+        "name": "Brightness"
+      },
+      "speed": {
+        "name": "Speed"
+      },
+      "hue_shift": {
+        "name": "Hue shift"
+      },
+      "intensity": {
+        "name": "Intensity"
+      }
+    },
+    "select": {
+      "scene": {
+        "name": "Scene"
+      },
+      "profile": {
+        "name": "Profile"
+      },
+      "layout": {
+        "name": "Layout"
+      },
+      "preset": {
+        "name": "Preset"
+      },
+      "audio_device": {
+        "name": "Audio device"
       }
     },
     "sensor": {
       "active_effect": {
         "name": "Active effect"
+      },
+      "fps": {
+        "name": "FPS"
+      },
+      "render_time": {
+        "name": "Render time"
+      },
+      "audio_energy": {
+        "name": "Audio energy"
+      }
+    },
+    "switch": {
+      "audio_reactive": {
+        "name": "Audio reactive"
+      },
+      "enabled": {
+        "name": "Enabled"
       }
     }
   },

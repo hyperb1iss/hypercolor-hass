@@ -255,7 +255,7 @@ def test_action_buttons_follow_hub_availability() -> None:
 
     button = HypercolorActionButton(
         entry,
-        name="Discover devices",
+        translation_key="discover_devices",
         unique_suffix="discover_devices",
         action=action,
     )

@@ -22,6 +22,30 @@ async def test_hub_entities_include_product_and_instance_namespace(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_card_facing_entities_publish_stable_translation_keys(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    fake_daemon: FakeHypercolorDaemon,
+) -> None:
+    entry = await setup_entry(hass, port=fake_daemon.port)
+    entries = er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
+    translation_keys = {item.unique_id: item.translation_key for item in entries}
+
+    expected = {
+        "srv_e2e:connected": "connected",
+        "srv_e2e:active_effect": "active_effect",
+        "srv_e2e:layout": "layout",
+        "srv_e2e:preset": "preset",
+        "srv_e2e:next_effect": "next_effect",
+        "srv_e2e:stop_effect": "stop_effect",
+        "srv_e2e:control:brightness": "brightness",
+        "srv_e2e:device:wled-studio:identify": "identify",
+        "srv_e2e:device:wled-studio:enabled": "enabled",
+    }
+    assert expected.items() <= translation_keys.items()
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_stale_zone_entities_are_pruned_at_setup(
     hass: HomeAssistant,
     enable_custom_integrations: None,

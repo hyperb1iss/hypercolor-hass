@@ -34,7 +34,7 @@ async def async_setup_entry(
 
 class HypercolorActiveEffectSensor(HypercolorEntity, SensorEntity):
     _attr_has_entity_name = True
-    _attr_name = "Active effect"
+    _attr_translation_key = "active_effect"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
         super().__init__(entry)
@@ -49,7 +49,7 @@ class HypercolorActiveEffectSensor(HypercolorEntity, SensorEntity):
 
 class HypercolorFpsSensor(HypercolorWebsocketEntity, SensorEntity):
     _attr_has_entity_name = True
-    _attr_name = "FPS"
+    _attr_translation_key = "fps"
     _attr_native_unit_of_measurement = "fps"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
@@ -66,7 +66,7 @@ class HypercolorFpsSensor(HypercolorWebsocketEntity, SensorEntity):
 
 class HypercolorRenderTimeSensor(HypercolorWebsocketEntity, SensorEntity):
     _attr_has_entity_name = True
-    _attr_name = "Render time"
+    _attr_translation_key = "render_time"
     _attr_native_unit_of_measurement = "ms"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
@@ -83,7 +83,7 @@ class HypercolorRenderTimeSensor(HypercolorWebsocketEntity, SensorEntity):
 
 class HypercolorAudioEnergySensor(HypercolorWebsocketEntity, SensorEntity):
     _attr_has_entity_name = True
-    _attr_name = "Audio energy"
+    _attr_translation_key = "audio_energy"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
