@@ -120,19 +120,22 @@ the device tree reads naturally.
 
 ### Hub device
 
+A daemon named `Hyperia` appears as the device **Hypercolor Hyperia**. Home Assistant
+uses that product and instance name for its entity namespace:
+
 | Entity | Type | Purpose |
 | --- | --- | --- |
-| `light.hypercolor` | light | pause or resume output, set brightness, and pick effects |
-| `binary_sensor.hypercolor_connected` | binary_sensor | live connectivity to the daemon |
-| `sensor.hypercolor_active_effect` | sensor | display name of the running effect |
-| `select.hypercolor_scene` | select | activate a scene |
-| `select.hypercolor_profile` | select | apply a profile |
-| `select.hypercolor_layout` | select | switch spatial layouts |
-| `select.hypercolor_preset` | select | apply a preset to the current effect |
-| `button.hypercolor_previous_effect` / `next_effect` / `random_effect` | button | walk the catalog |
-| `button.hypercolor_stop_effect` | button | clear the current effect |
-| `button.hypercolor_discover_devices` | button | re-run device discovery |
-| `number.hypercolor_brightness` / `speed` / `hue_shift` / `intensity` | number | live patches into the running effect |
+| `light.hypercolor_hyperia` | light | pause or resume output, set brightness, and pick effects |
+| `binary_sensor.hypercolor_hyperia_connected` | binary_sensor | live connectivity to the daemon |
+| `sensor.hypercolor_hyperia_active_effect` | sensor | display name of the running effect |
+| `select.hypercolor_hyperia_scene` | select | activate a scene |
+| `select.hypercolor_hyperia_profile` | select | apply a profile |
+| `select.hypercolor_hyperia_layout` | select | switch spatial layouts |
+| `select.hypercolor_hyperia_preset` | select | apply a preset to the current effect |
+| `button.hypercolor_hyperia_previous_effect` / `next_effect` / `random_effect` | button | walk the catalog |
+| `button.hypercolor_hyperia_stop_effect` | button | clear the current effect |
+| `button.hypercolor_hyperia_discover_devices` | button | re-run device discovery |
+| `number.hypercolor_hyperia_brightness` / `speed` / `hue_shift` / `intensity` | number | live patches into the running effect |
 
 Turning the master light off pauses output without discarding the active effect, preset,
 or controls. Turning it back on resumes that exact state. The Stop button is the separate,
@@ -142,17 +145,19 @@ destructive action that clears the active effect.
 
 Toggle these in the integration's options panel:
 
-- 🌊 **Audio entities** (`channels.audio`) adds `binary_sensor.hypercolor_audio_beat`,
-  `binary_sensor.hypercolor_audio_reactive_active`, `sensor.hypercolor_audio_energy`,
-  `select.hypercolor_audio_device`, and `switch.hypercolor_audio_reactive`.
-- 🧪 **Metrics entities** (`channels.metrics`): adds `sensor.hypercolor_fps` and
-  `sensor.hypercolor_render_time`.
+- 🌊 **Audio entities** (`channels.audio`) adds
+  `binary_sensor.hypercolor_hyperia_audio_beat`,
+  `binary_sensor.hypercolor_hyperia_audio_reactive_active`,
+  `sensor.hypercolor_hyperia_audio_energy`, `select.hypercolor_hyperia_audio_device`,
+  and `switch.hypercolor_hyperia_audio_reactive`.
+- 🧪 **Metrics entities** (`channels.metrics`): adds
+  `sensor.hypercolor_hyperia_fps` and `sensor.hypercolor_hyperia_render_time`.
 - 🦋 **Per-device entities** (`per_device_entities`) lets you opt specific device ids in to get
   their own light, identify button, and enabled switch.
 
 ### Master light attributes
 
-`light.hypercolor` carries a card-facing snapshot of the running effect so a dashboard
+`light.hypercolor_hyperia` carries a card-facing snapshot of the running effect so a dashboard
 card (e.g. [hyper-light-card](https://github.com/hyperb1iss/hyper-light-card)) can render
 rich effect info and a full control surface without walking every companion entity:
 
@@ -221,11 +226,11 @@ action:
 alias: Bass dim main lights
 trigger:
   - platform: state
-    entity_id: binary_sensor.hypercolor_audio_beat
+    entity_id: binary_sensor.hypercolor_hyperia_audio_beat
     to: "on"
 condition:
   - condition: numeric_state
-    entity_id: sensor.hypercolor_audio_energy
+    entity_id: sensor.hypercolor_hyperia_audio_energy
     above: 0.7
 action:
   - service: light.turn_on
@@ -248,14 +253,14 @@ card if you want a polished UI. For a stock entities card:
 type: entities
 title: Hypercolor
 entities:
-  - light.hypercolor
-  - sensor.hypercolor_active_effect
-  - select.hypercolor_scene
-  - select.hypercolor_preset
-  - number.hypercolor_brightness
-  - number.hypercolor_speed
-  - number.hypercolor_hue_shift
-  - number.hypercolor_intensity
+  - light.hypercolor_hyperia
+  - sensor.hypercolor_hyperia_active_effect
+  - select.hypercolor_hyperia_scene
+  - select.hypercolor_hyperia_preset
+  - number.hypercolor_hyperia_brightness
+  - number.hypercolor_hyperia_speed
+  - number.hypercolor_hyperia_hue_shift
+  - number.hypercolor_hyperia_intensity
 ```
 
 More examples live in [`examples/`](examples/).

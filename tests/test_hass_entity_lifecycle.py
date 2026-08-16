@@ -10,6 +10,18 @@ from tests.support.hypercolor_daemon import FakeHypercolorDaemon
 pytest_plugins = ("tests.support.fixtures",)
 
 
+async def test_hub_entities_include_product_and_instance_namespace(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    fake_daemon: FakeHypercolorDaemon,
+) -> None:
+    entry = await setup_entry(hass, port=fake_daemon.port)
+    master = first_state(hass, "light", lambda state: "active_effect_id" in state.attributes)
+
+    assert master.entity_id == "light.hypercolor_hyperia"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_stale_zone_entities_are_pruned_at_setup(
     hass: HomeAssistant,
     enable_custom_integrations: None,
