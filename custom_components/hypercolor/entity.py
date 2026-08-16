@@ -18,6 +18,7 @@ from .const import (
     CONF_UNAVAILABLE_AFTER_S,
     DEFAULT_DISCONNECT_GRACE_S,
     DOMAIN,
+    NAME,
     OPTIONS_DEFAULTS,
 )
 from .models import HypercolorSnapshot
@@ -194,12 +195,16 @@ def add_configured_device_entities(
 def hub_device_info(runtime: HypercolorRuntimeData, entry_data: Mapping[str, Any]) -> DeviceInfo:
     return DeviceInfo(
         identifiers={(DOMAIN, runtime.server.instance_id)},
-        name=runtime.server.instance_name,
+        name=hub_device_name(runtime.server.instance_name),
         manufacturer="Hypercolor",
         model="Daemon",
         sw_version=runtime.server.version,
         configuration_url=f"http://{entry_data['host']}:{entry_data['port']}",
     )
+
+
+def hub_device_name(instance_name: str) -> str:
+    return f"{NAME} {instance_name}"
 
 
 def child_device_info(runtime: HypercolorRuntimeData, device: Device) -> DeviceInfo:

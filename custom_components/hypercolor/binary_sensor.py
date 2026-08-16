@@ -38,7 +38,7 @@ async def async_setup_entry(
 class HypercolorConnectedBinarySensor(BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_has_entity_name = True
-    _attr_name = "Connected"
+    _attr_translation_key = "connected"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
         runtime = entry.runtime_data
@@ -94,7 +94,7 @@ class HypercolorConnectedBinarySensor(BinarySensorEntity):
 class HypercolorAudioBeatBinarySensor(HypercolorWebsocketEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.SOUND
     _attr_has_entity_name = True
-    _attr_name = "Audio beat"
+    _attr_translation_key = "audio_beat"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
         super().__init__(entry)
@@ -134,7 +134,7 @@ class HypercolorAudioBeatBinarySensor(HypercolorWebsocketEntity, BinarySensorEnt
 
 class HypercolorAudioReactiveBinarySensor(HypercolorEntity, BinarySensorEntity):
     _attr_has_entity_name = True
-    _attr_name = "Audio reactive active"
+    _attr_translation_key = "audio_reactive_active"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
         super().__init__(entry)

@@ -207,7 +207,7 @@ class FakeHypercolorDaemon:
     def _server(self) -> JsonObject:
         return {
             "instance_id": "srv_e2e",
-            "instance_name": "Hypercolor E2E",
+            "instance_name": "Hyperia",
             "version": "0.1.0",
             "auth_required": False,
             "device_count": 1,
@@ -219,7 +219,7 @@ class FakeHypercolorDaemon:
             "version": "0.1.0",
             "server": {
                 "instance_id": "srv_e2e",
-                "instance_name": "Hypercolor E2E",
+                "instance_name": "Hyperia",
                 "version": "0.1.0",
             },
             "config_path": "/var/lib/hypercolor/config.toml",

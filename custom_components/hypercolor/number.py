@@ -45,7 +45,7 @@ class HypercolorLiveControlNumber(HypercolorEntity, NumberEntity):
         super().__init__(entry)
         runtime = entry.runtime_data
         self._control_id = control_id
-        self._attr_name = control_id.replace("_", " ").title()
+        self._attr_translation_key = control_id
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:control:{control_id}"
 

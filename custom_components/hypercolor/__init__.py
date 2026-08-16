@@ -37,7 +37,7 @@ from .coordinator import (
     reconcile_loop,
     websocket_loop,
 )
-from .entity import child_device_identifier
+from .entity import child_device_identifier, hub_device_info
 from .models import HypercolorState
 from .runtime_data import ConnectionSource, ConnectionState, HypercolorRuntimeData
 from .services import async_setup_services
@@ -201,12 +201,7 @@ def _register_child_devices(
     runtime = entry.runtime_data
     device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
-        identifiers={(DOMAIN, runtime.server.instance_id)},
-        name=runtime.server.instance_name,
-        manufacturer="Hypercolor",
-        model="Daemon",
-        sw_version=runtime.server.version,
-        configuration_url=f"http://{entry.data[CONF_HOST]}:{entry.data[CONF_PORT]}",
+        **hub_device_info(runtime, entry.data),
     )
     for device in devices:
         device_id = device.id

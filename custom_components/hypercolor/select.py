@@ -28,21 +28,21 @@ async def async_setup_entry(
         HypercolorCatalogSelect(
             entry,
             kind="scenes",
-            name="Scene",
+            translation_key="scene",
             unique_suffix="scene",
             action=entry.runtime_data.client.activate_scene,
         ),
         HypercolorCatalogSelect(
             entry,
             kind="profiles",
-            name="Profile",
+            translation_key="profile",
             unique_suffix="profile",
             action=entry.runtime_data.client.apply_profile,
         ),
         HypercolorCatalogSelect(
             entry,
             kind="layouts",
-            name="Layout",
+            translation_key="layout",
             unique_suffix="layout",
             action=entry.runtime_data.client.apply_layout,
         ),
@@ -61,7 +61,7 @@ class HypercolorCatalogSelect(HypercolorEntity, SelectEntity):
         entry: ConfigEntry[HypercolorRuntimeData],
         *,
         kind: CatalogKind,
-        name: str,
+        translation_key: str,
         unique_suffix: str,
         action: Callable[[str], Awaitable[object]],
     ) -> None:
@@ -69,7 +69,7 @@ class HypercolorCatalogSelect(HypercolorEntity, SelectEntity):
         runtime = entry.runtime_data
         self._kind = kind
         self._action = action
-        self._attr_name = name
+        self._attr_translation_key = translation_key
         self._attr_device_info = hub_device_info(runtime, entry.data)
         self._attr_unique_id = f"{runtime.server.instance_id}:{unique_suffix}"
 
@@ -106,7 +106,7 @@ class HypercolorCatalogSelect(HypercolorEntity, SelectEntity):
 
 class HypercolorPresetSelect(HypercolorEntity, SelectEntity):
     _attr_has_entity_name = True
-    _attr_name = "Preset"
+    _attr_translation_key = "preset"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
         super().__init__(entry)
@@ -139,7 +139,7 @@ class HypercolorPresetSelect(HypercolorEntity, SelectEntity):
 
 class HypercolorAudioDeviceSelect(HypercolorEntity, SelectEntity):
     _attr_has_entity_name = True
-    _attr_name = "Audio device"
+    _attr_translation_key = "audio_device"
 
     def __init__(self, entry: ConfigEntry[HypercolorRuntimeData]) -> None:
         super().__init__(entry)
