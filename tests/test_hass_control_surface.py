@@ -27,6 +27,9 @@ async def test_master_light_and_presets_drive_the_fake_daemon(
     assert "Solid Color" in master.attributes["effect_list"]
     assert master.attributes["active_scene_id"] == "default"
     assert master.attributes["zone_count"] == 1
+    scene_select = first_state(hass, "select", lambda state: state.entity_id.endswith("_scene"))
+    assert scene_select.state == "unknown"
+    assert scene_select.attributes["options"] == ["Evening"]
 
     assert master.attributes["effect_description"] == "Test rainbow"
     assert master.attributes["effect_publisher"] == "Hypercolor"

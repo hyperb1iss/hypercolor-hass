@@ -43,7 +43,10 @@ class FakeHypercolorDaemon:
         self.brightness = 0.8
         self.zone_brightness = 1.0
         self.zone_enabled = True
-        self.control_values: dict[str, Any] = {"speed": 60.0, "brightness": 80.0}
+        self.control_values: dict[str, Any] = {
+            "speed": payloads.envelope(60.0),
+            "brightness": payloads.envelope(80.0),
+        }
         self.control_updates: list[dict[str, Any]] = []
         self.applied_effects: list[AppliedEffect] = []
         self.device_updates: list[DeviceUpdate] = []
@@ -51,6 +54,11 @@ class FakeHypercolorDaemon:
         self.pause_requests = 0
         self.resume_requests = 0
         self.clear_requests = 0
+
+    @property
+    def scalar_control_values(self) -> dict[str, Any]:
+        """The live layer's controls, flattened for assertions."""
+        return _scalar_controls(self.control_values)
 
     async def websocket(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(protocols=("hypercolor-v1",))
@@ -81,18 +89,18 @@ class FakeHypercolorDaemon:
             and parts[2] == "presets"
         ):
             presets = [payloads.effect_preset()] if parts[1] == "rainbow" else []
-            return self._ok(self._items(presets))
+            return self._ok(self._complete(presets))
         responses: dict[str, Callable[[], JsonObject]] = {
             "GET /system": self._system,
             "GET /output": self._output,
             "POST /diagnose": payloads.diagnostics,
-            "GET /effects": lambda: self._items(payloads.effects()),
-            "GET /devices": lambda: self._items([payloads.device()]),
+            "GET /effects": lambda: self._complete(payloads.effects()),
+            "GET /devices": lambda: self._paged([payloads.device()], request),
             "GET /scene": self._scene,
-            "GET /scenes": lambda: self._items([payloads.scene_summary()]),
-            "GET /layouts": lambda: self._items([payloads.layout_summary()]),
+            "GET /scenes": lambda: self._complete([payloads.scene_summary()]),
+            "GET /layouts": lambda: self._paged([payloads.layout_summary()], request),
             "GET /layouts/active": payloads.layout,
-            "GET /system/audio-devices": lambda: {"current": "none", "devices": []},
+            "GET /system/audio-devices": payloads.audio_devices,
         }
         if response := responses.get(route):
             return self._ok(response())
@@ -101,12 +109,12 @@ class FakeHypercolorDaemon:
     async def apply_effect(self, request: web.Request) -> web.Response:
         body = await _json_body(request)
         effect_id = request.match_info["effect_id"]
-        controls = _scalar_controls(body.get("controls") or {})
+        controls = dict(body.get("controls") or {})
         self.active_effect_id = effect_id
         self.active_preset_id = str(body["preset_id"]) if body.get("preset_id") else None
         self.paused = False
         self.control_values.update(controls)
-        applied: AppliedEffect = {"effect_id": effect_id, "controls": controls}
+        applied: AppliedEffect = {"effect_id": effect_id, "controls": _scalar_controls(controls)}
         if zone := body.get("zone"):
             applied["zone"] = str(zone)
         if preset_id := body.get("preset_id"):
@@ -118,14 +126,14 @@ class FakeHypercolorDaemon:
         body = await _json_body(request)
         effect_id = request.match_info["effect_id"]
         preset_id = request.match_info["preset_id"]
-        controls = _scalar_controls(payloads.effect_preset()["controls"])
+        controls = dict(payloads.effect_preset()["controls"])
         self.active_effect_id = effect_id
         self.active_preset_id = preset_id
         self.paused = False
         self.control_values.update(controls)
         applied: AppliedEffect = {
             "effect_id": effect_id,
-            "controls": controls,
+            "controls": _scalar_controls(controls),
             "preset_id": preset_id,
         }
         if zone := body.get("zone"):
@@ -135,13 +143,13 @@ class FakeHypercolorDaemon:
 
     async def patch_layer_controls(self, request: web.Request) -> web.Response:
         body = await _json_body(request)
-        controls = _scalar_controls(body.get("values") or {})
+        controls = dict(body.get("values") or {})
         self.control_values.update(controls)
         self.control_updates.append(
             {
                 "zone": request.match_info["zone"],
                 "layer": request.match_info["layer"],
-                "values": controls,
+                "values": _scalar_controls(controls),
             }
         )
         return self._ok(self._zone())
@@ -213,11 +221,20 @@ class FakeHypercolorDaemon:
         }
 
     @staticmethod
-    def _items(items: list[JsonObject]) -> JsonObject:
+    def _complete(items: list[JsonObject]) -> JsonObject:
+        """A list the daemon serves whole: no page block at all."""
+        return {"items": items, "total": len(items)}
+
+    @staticmethod
+    def _paged(items: list[JsonObject], request: web.Request) -> JsonObject:
+        """A genuinely paged list, echoing the offset and limit it was asked for."""
+        offset = int(request.query.get("offset", 0))
+        limit = int(request.query.get("limit", 50))
+        window = items[offset : offset + limit]
         return {
-            "items": items,
+            "items": window,
             "total": len(items),
-            "page": {"offset": 0, "limit": 50, "has_more": False},
+            "page": {"offset": offset, "limit": limit, "has_more": offset + limit < len(items)},
         }
 
     @staticmethod

@@ -73,6 +73,27 @@ async def test_stale_zone_entities_are_pruned_at_setup(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_retired_profile_select_is_removed_on_upgrade(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    fake_daemon: FakeHypercolorDaemon,
+) -> None:
+    entry = await setup_entry(hass, port=fake_daemon.port, setup=False)
+    entity_registry = er.async_get(hass)
+    legacy = entity_registry.async_get_or_create(
+        "select",
+        DOMAIN,
+        "srv_e2e:profile",
+        config_entry=entry,
+    )
+
+    await activate_entry(hass, entry)
+
+    assert entity_registry.async_get(legacy.entity_id) is None
+    assert entity_registry.async_get_entity_id("select", DOMAIN, "srv_e2e:scene") is not None
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_master_pause_resume_preserves_exact_effect_state(
     hass: HomeAssistant,
     enable_custom_integrations: None,
@@ -98,7 +119,7 @@ async def test_master_pause_resume_preserves_exact_effect_state(
     assert fake_daemon.resume_requests == 1
     assert fake_daemon.active_effect_id == "rainbow"
     assert fake_daemon.active_preset_id == "preset-rainbow"
-    assert fake_daemon.control_values == {"speed": 60.0, "brightness": 80.0}
+    assert fake_daemon.scalar_control_values == {"speed": 60.0, "brightness": 80.0}
     assert fake_daemon.applied_effects == []
     resumed = hass.states.get(master.entity_id)
     assert resumed is not None

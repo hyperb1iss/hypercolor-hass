@@ -279,10 +279,14 @@ def zone_role(zone: ZoneResource) -> str:
 
 
 def effect_layer(zone: ZoneResource) -> EffectLayer | None:
-    """Return the topmost effect layer of a zone, if it has one."""
+    """Return the topmost enabled effect layer of a zone, if it has one.
+
+    The renderer skips disabled layers, so a disabled layer is never the
+    effect a zone is showing, whatever sits above or below it.
+    """
     for layer in reversed(zone.layers):
         source = layer.source.additional_properties
-        if source.get("type") != "effect":
+        if layer.enabled is False or source.get("type") != "effect":
             continue
         effect_id = source.get("effect_id")
         if not isinstance(effect_id, str):
@@ -303,9 +307,12 @@ def primary_effect_layer(scene: SceneDocument) -> EffectLayer | None:
     """Return the effect layer the master light represents.
 
     The primary zone wins; without one, the first renderable zone that
-    carries an effect stands in.
+    carries an effect stands in. Disabled zones do not render, so they
+    never own the master light's effect.
     """
-    renderable = [zone for zone in scene.zones if zone_role(zone) != ZONE_ROLE_DISPLAY]
+    renderable = [
+        zone for zone in scene.zones if zone.enabled and zone_role(zone) != ZONE_ROLE_DISPLAY
+    ]
     ordered = sorted(renderable, key=lambda zone: zone_role(zone) != ZONE_ROLE_PRIMARY)
     return next((layer for zone in ordered if (layer := effect_layer(zone)) is not None), None)
 

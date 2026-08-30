@@ -141,6 +141,41 @@ def test_primary_effect_layer_falls_back_to_the_first_renderable_zone() -> None:
     assert layer.effect_id == "solid_color"
 
 
+def test_primary_effect_layer_skips_disabled_layers_and_zones() -> None:
+    primary = payloads.zone("rainbow", {}, None)
+    primary["layers"][0]["enabled"] = False
+    primary["layers"].append(
+        {
+            "id": "0d6a7c1e-2b3f-4d5e-8f90-a1b2c3d4e5f6",
+            "source": {"type": "effect", "effect_id": "solid_color", "controls": {}},
+            "enabled": True,
+        }
+    )
+    primary["layers"].append(
+        {
+            "id": "1e7b8d2f-3c4a-4e6f-9a01-b2c3d4e5f607",
+            "source": {"type": "effect", "effect_id": "clock", "controls": {}},
+            "enabled": False,
+        }
+    )
+    disabled_zone = payloads.zone("aurora", {}, None)
+    disabled_zone["id"] = "zone-dormant"
+    disabled_zone["role"] = "custom"
+    disabled_zone["enabled"] = False
+    scene = SceneDocument.from_dict(payloads.scene_document([disabled_zone, primary]))
+
+    layer = primary_effect_layer(scene)
+
+    assert layer is not None
+    assert layer.zone_id == PRIMARY_ZONE_ID
+    assert layer.effect_id == "solid_color"
+
+    primary["enabled"] = False
+    dormant_only = SceneDocument.from_dict(payloads.scene_document([disabled_zone, primary]))
+
+    assert primary_effect_layer(dormant_only) is None
+
+
 def test_primary_effect_layer_is_none_for_an_empty_scene() -> None:
     scene = SceneDocument.from_dict(payloads.scene_document([payloads.zone("", {}, None)]))
 

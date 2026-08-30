@@ -101,7 +101,7 @@ def device() -> JsonObject:
 
 
 def scene_summary() -> JsonObject:
-    return minimal(SceneSummary, id="default", name="Default")
+    return minimal(SceneSummary, id="scene-evening", name="Evening")
 
 
 def zone(
@@ -117,10 +117,7 @@ def zone(
         source: JsonObject = {
             "type": "effect",
             "effect_id": effect_id,
-            "controls": {
-                key: value if isinstance(value, dict) else {"kind": "float", "value": float(value)}
-                for key, value in control_values.items()
-            },
+            "controls": {key: envelope(value) for key, value in control_values.items()},
         }
         if preset_id is not None:
             source["preset_id"] = preset_id
@@ -228,6 +225,18 @@ def system_status(*, active_effect: str | None, brightness: int, paused: bool) -
     return status
 
 
+def audio_devices() -> JsonObject:
+    """The daemon always lists its three fallback sources, whatever the host has."""
+    return {
+        "current": "none",
+        "devices": [
+            {"id": "default", "name": "System default", "description": "Host default input"},
+            {"id": "microphone", "name": "Microphone", "description": "First capture device"},
+            {"id": "none", "name": "Disabled", "description": "No audio capture"},
+        ],
+    }
+
+
 def diagnostics() -> JsonObject:
     return minimal(DiagnoseResponse)
 
@@ -236,11 +245,28 @@ def effect_name(effect_id: str) -> str:
     return _EFFECT_NAMES.get(effect_id, effect_id)
 
 
+def envelope(value: Any) -> JsonObject:
+    """Wrap a Python scalar the way the daemon tags control values."""
+    if isinstance(value, dict) and "kind" in value:
+        return value
+    if isinstance(value, bool):
+        return {"kind": "bool", "value": value}
+    if isinstance(value, int):
+        return {"kind": "int", "value": value}
+    if isinstance(value, float):
+        return {"kind": "float", "value": value}
+    if isinstance(value, str):
+        return {"kind": "text", "value": value}
+    msg = f"no control envelope for {value!r}"
+    raise TypeError(msg)
+
+
 def wire_control(control_id: str, name: str, default: float) -> JsonObject:
     return {
         "id": control_id,
         "name": name,
         "control_type": "slider",
+        "kind": "number",
         "default_value": {"kind": "float", "value": default},
         "min": 0,
         "max": 100,

@@ -44,6 +44,8 @@ from .services import async_setup_services
 
 type HypercolorConfigEntry = ConfigEntry[HypercolorRuntimeData]
 
+RETIRED_UNIQUE_SUFFIXES = ("profile",)
+
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
@@ -109,6 +111,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HypercolorConfigEntry) -
     sync_devices()
     entry.async_on_unload(runtime_data.coordinator.async_add_listener(sync_devices))
     _cleanup_opted_out_entities(hass, entry)
+    _cleanup_retired_entities(hass, entry)
     _cleanup_stale_zone_entities(hass, entry, runtime_data.snapshot.state)
 
     reconcile_interval_s = int(
@@ -232,6 +235,24 @@ def _cleanup_opted_out_entities(
             continue
         device_id = registry_entry.unique_id[len(prefix) : -len(suffix)]
         if device_id not in opted_in:
+            entity_registry.async_remove(registry_entry.entity_id)
+
+
+def _cleanup_retired_entities(
+    hass: HomeAssistant,
+    entry: HypercolorConfigEntry,
+) -> None:
+    """Drop registry rows for entities this integration no longer creates.
+
+    Profiles folded into scenes upstream, so the profile select has no
+    successor entity and would otherwise linger as a dead row after an
+    upgrade.
+    """
+    entity_registry = er.async_get(hass)
+    runtime = entry.runtime_data
+    retired = {f"{runtime.server.instance_id}:{suffix}" for suffix in RETIRED_UNIQUE_SUFFIXES}
+    for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
+        if registry_entry.unique_id in retired:
             entity_registry.async_remove(registry_entry.entity_id)
 
 
