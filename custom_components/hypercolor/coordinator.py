@@ -13,7 +13,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from websockets.exceptions import InvalidStatus
 
-from hypercolor import HypercolorAuthenticationError, HypercolorError
+from hypercolor import HypercolorAuthenticationError, HypercolorError, HypercolorNotFoundError
 from hypercolor.models import (
     AudioDevicesResponse,
     DeviceSummary,
@@ -282,8 +282,20 @@ async def load_catalog(
     )
 
 
-async def _load_active_effect(client: SnapshotClient, layer: EffectLayer) -> ActiveEffect:
-    detail = await client.get_effect(layer.effect_id)
+async def _load_active_effect(
+    client: SnapshotClient,
+    layer: EffectLayer,
+) -> ActiveEffect | None:
+    """Describe the projected layer's effect, or None when the registry lost it.
+
+    A layer can outlive its effect: the daemon keeps the layer and skips
+    it at render time after the source file is deleted and rescanned.
+    That is a valid scene, not a reason to take the whole entry down.
+    """
+    try:
+        detail = await client.get_effect(layer.effect_id)
+    except HypercolorNotFoundError:
+        return None
     cover_image_url = (
         client.effect_cover_image_url(layer.effect_id)
         if isinstance(detail.cover_image_url, str) and detail.cover_image_url
@@ -299,7 +311,10 @@ async def _load_effect_presets(
     layer = primary_effect_layer(await scene)
     if layer is None:
         return None, []
-    return layer.effect_id, await client.get_effect_presets(layer.effect_id)
+    try:
+        return layer.effect_id, await client.get_effect_presets(layer.effect_id)
+    except HypercolorNotFoundError:
+        return layer.effect_id, []
 
 
 async def websocket_loop(runtime: HypercolorRuntimeData, options: dict[str, Any]) -> None:

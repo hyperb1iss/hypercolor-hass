@@ -57,6 +57,7 @@ async def test_master_light_and_presets_drive_the_fake_daemon(
         "effect_id": "rainbow",
         "controls": {"speed": 60.0},
         "preset_id": "preset-rainbow",
+        "zone": PRIMARY_ZONE_ID,
     }
 
     speed = first_state(hass, "number", lambda state: "speed" in state.entity_id)

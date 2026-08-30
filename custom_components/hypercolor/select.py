@@ -111,8 +111,14 @@ class HypercolorPresetSelect(HypercolorEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         preset = self._index.by_id[self._index.resolve(option)]
+        active = self.snapshot.state.active_effect
+        zone_id = active.zone_id if active is not None else None
         await self._runtime.async_mutate(
-            lambda: self._runtime.client.apply_effect_preset(preset.effect_id, preset.id)
+            lambda: self._runtime.client.apply_effect_preset(
+                preset.effect_id,
+                preset.id,
+                zone=zone_id,
+            )
         )
 
     @property

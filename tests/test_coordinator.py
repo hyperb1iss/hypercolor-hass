@@ -28,7 +28,11 @@ from custom_components.hypercolor.runtime_data import (
     ConnectionSource,
     ConnectionState,
 )
-from hypercolor import HypercolorAuthenticationError, HypercolorConnectionError
+from hypercolor import (
+    HypercolorAuthenticationError,
+    HypercolorConnectionError,
+    HypercolorNotFoundError,
+)
 from hypercolor.models import (
     AudioDevicesResponse,
     DeviceSummary,
@@ -67,6 +71,21 @@ async def test_load_state_reads_the_live_scene_tree() -> None:
     assert state.active_effect_cover_image_url.endswith("/effects/aurora/cover")
     assert client.max_in_flight == 4
     assert client.effect_lookups == ["aurora"]
+
+
+async def test_load_state_survives_a_layer_whose_effect_left_the_registry() -> None:
+    client = SnapshotClientFixture()
+    client.missing_effects = {"aurora"}
+
+    state = await load_state(client)
+    catalog = await load_catalog(client)
+
+    assert state.active_effect is None
+    assert state.active_effect_id is None
+    assert state.active_effect_name == "Aurora"
+    assert state.scene.zones[0].layers
+    assert catalog.preset_effect_id == "aurora"
+    assert catalog.presets.items == ()
 
 
 async def test_load_state_never_uses_display_name_as_effect_id() -> None:
@@ -377,6 +396,7 @@ class SnapshotClientFixture:
         self.presets = [_preset("soft", "Soft", origin="bundled")]
         self.audio_devices = AudioDevicesResponse.from_dict({"current": "none", "devices": []})
         self.effect_lookups: list[str] = []
+        self.missing_effects: set[str] = set()
         self.in_flight = 0
         self.max_in_flight = 0
 
@@ -394,6 +414,9 @@ class SnapshotClientFixture:
 
     async def get_effect(self, effect_id: str) -> EffectDetailResponse:
         self.effect_lookups.append(effect_id)
+        if effect_id in self.missing_effects:
+            await self._load(None)
+            raise HypercolorNotFoundError(f"effect {effect_id} not found")
         detail = payloads.effect_detail(effect_id)
         detail["name"] = effect_id.title()
         return await self._load(EffectDetailResponse.from_dict(detail))
@@ -408,6 +431,9 @@ class SnapshotClientFixture:
         return await self._load(self.layouts)
 
     async def get_effect_presets(self, effect_id: str) -> list[EffectPresetSummary]:
+        if effect_id in self.missing_effects:
+            await self._load(None)
+            raise HypercolorNotFoundError(f"effect {effect_id} not found")
         return await self._load(self.presets)
 
     async def get_devices(self) -> list[DeviceSummary]:
