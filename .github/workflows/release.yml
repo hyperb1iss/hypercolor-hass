@@ -68,7 +68,7 @@ jobs:
 
       - uses: ./.github/actions/setup-hypercolor
         with:
-          hypercolor-ref: ${{ vars.HYPERCOLOR_REF || '978096e614695777d3cd13ea0b184877e46afd84' }}
+          hypercolor-ref: ${{ vars.HYPERCOLOR_REF || '8b6a6adb94b77116ccbfff05064837d566f616d4' }}
           hypercolor-token: ${{ secrets.HYPERCOLOR_TOKEN }}
 
       - name: Configure git
