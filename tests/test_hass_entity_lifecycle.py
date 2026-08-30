@@ -6,6 +6,7 @@ from homeassistant.helpers import entity_registry as er
 from custom_components.hypercolor.const import DOMAIN
 from tests.support.hass import activate_entry, first_state, setup_entry
 from tests.support.hypercolor_daemon import FakeHypercolorDaemon
+from tests.support.hypercolor_payloads import PRIMARY_ZONE_ID
 
 pytest_plugins = ("tests.support.fixtures",)
 
@@ -34,6 +35,7 @@ async def test_card_facing_entities_publish_stable_translation_keys(
     expected = {
         "srv_e2e:connected": "connected",
         "srv_e2e:active_effect": "active_effect",
+        "srv_e2e:scene": "scene",
         "srv_e2e:layout": "layout",
         "srv_e2e:preset": "preset",
         "srv_e2e:next_effect": "next_effect",
@@ -43,6 +45,7 @@ async def test_card_facing_entities_publish_stable_translation_keys(
         "srv_e2e:device:wled-studio:enabled": "enabled",
     }
     assert expected.items() <= translation_keys.items()
+    assert "srv_e2e:profile" not in translation_keys
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -64,7 +67,7 @@ async def test_stale_zone_entities_are_pruned_at_setup(
 
     assert entity_registry.async_get(stale.entity_id) is None
     assert (
-        entity_registry.async_get_entity_id("light", DOMAIN, "srv_e2e:zone:zone-primary")
+        entity_registry.async_get_entity_id("light", DOMAIN, f"srv_e2e:zone:{PRIMARY_ZONE_ID}")
         is not None
     )
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -79,6 +82,7 @@ async def test_master_pause_resume_preserves_exact_effect_state(
     master = first_state(hass, "light", lambda state: "active_effect_id" in state.attributes)
     assert master.state == "on"
     assert master.attributes["effect"] == "Rainbow"
+    assert master.attributes["brightness"] == 204
 
     await hass.services.async_call(
         "light", "turn_off", {"entity_id": master.entity_id}, blocking=True
@@ -103,6 +107,28 @@ async def test_master_pause_resume_preserves_exact_effect_state(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_master_brightness_writes_the_output_fraction(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    fake_daemon: FakeHypercolorDaemon,
+) -> None:
+    entry = await setup_entry(hass, port=fake_daemon.port)
+    master = first_state(hass, "light", lambda state: "active_effect_id" in state.attributes)
+
+    await hass.services.async_call(
+        "light",
+        "turn_on",
+        {"entity_id": master.entity_id, "brightness": 128},
+        blocking=True,
+    )
+
+    assert fake_daemon.brightness == 0.502
+    updated = hass.states.get(master.entity_id)
+    assert updated is not None
+    assert updated.attributes["brightness"] == 128
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_master_turn_off_and_stop_button_are_idempotent(
     hass: HomeAssistant,
     enable_custom_integrations: None,
@@ -123,21 +149,19 @@ async def test_master_turn_off_and_stop_button_are_idempotent(
             {"entity_id": master.entity_id},
             blocking=True,
         )
-    await hass.services.async_call(
-        "button",
-        "press",
-        {"entity_id": stop_button.entity_id},
-        blocking=True,
-    )
-    await hass.services.async_call(
-        "button",
-        "press",
-        {"entity_id": stop_button.entity_id},
-        blocking=True,
-    )
+    for _ in range(2):
+        await hass.services.async_call(
+            "button",
+            "press",
+            {"entity_id": stop_button.entity_id},
+            blocking=True,
+        )
 
     assert fake_daemon.pause_requests == 2
-    assert fake_daemon.stop_requests == 2
+    assert fake_daemon.clear_requests == 2
+    stopped = hass.states.get(master.entity_id)
+    assert stopped is not None
+    assert stopped.attributes["active_effect_id"] is None
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 

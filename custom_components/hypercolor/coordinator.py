@@ -15,17 +15,17 @@ from websockets.exceptions import InvalidStatus
 
 from hypercolor import HypercolorAuthenticationError, HypercolorError
 from hypercolor.models import (
-    ActiveEffect,
-    ActiveScene,
-    AudioDevices,
-    Device,
-    EffectPreset,
+    AudioDevicesResponse,
+    DeviceSummary,
+    EffectDetailResponse,
+    EffectPresetSummary,
     EffectSummary,
-    Layout,
     LayoutSummary,
-    ProfileSummary,
-    Scene,
-    SystemState,
+    OutputResource,
+    SceneDocument,
+    SceneSummary,
+    SpatialLayout,
+    SystemStatus,
 )
 from hypercolor.websocket import EventMessage, MetricsMessage, SpectrumData
 
@@ -37,7 +37,15 @@ from .const import (
     DOMAIN,
     OPTIONS_DEFAULTS,
 )
-from .models import HypercolorAudio, HypercolorCatalog, HypercolorSnapshot, HypercolorState
+from .models import (
+    ActiveEffect,
+    EffectLayer,
+    HypercolorAudio,
+    HypercolorCatalog,
+    HypercolorSnapshot,
+    HypercolorState,
+    primary_effect_layer,
+)
 from .repairs import (
     async_create_auth_issue,
     async_create_unavailable_issue,
@@ -59,14 +67,13 @@ _REFRESH_EVENTS = {
     "capture_started",
     "capture_stopped",
     "config_changed",
-    "context_changed",
     "control_surface_changed",
     "daemon_shutdown",
     "daemon_started",
-    "input_source_changed",
     "library_store_changed",
     "paused",
     "resumed",
+    "service_identity_changed",
     "session_changed",
 }
 _REFRESH_EVENT_PREFIXES = (
@@ -75,42 +82,42 @@ _REFRESH_EVENT_PREFIXES = (
     "effect_",
     "layer_",
     "layout_",
-    "profile_",
-    "render_group_",
     "scene_",
+    "zone_",
 )
 _NO_REFRESH_EVENTS = {
     "audio_level_update",
     "beat_detected",
-    "device_metrics",
+    "fps_changed",
     "frame_rendered",
+    "input_event_received",
 }
 
 
 class SnapshotClient(Protocol):
-    async def get_status(self) -> SystemState: ...
+    async def get_status(self) -> SystemStatus: ...
 
-    async def get_active_effect(self) -> ActiveEffect | None: ...
+    async def get_output(self) -> OutputResource: ...
 
-    async def get_active_scene(self) -> ActiveScene | None: ...
+    async def get_live_scene(self) -> SceneDocument: ...
 
-    async def get_active_layout(self) -> Layout | None: ...
+    async def get_active_layout(self) -> SpatialLayout | None: ...
+
+    async def get_effect(self, effect_id: str) -> EffectDetailResponse: ...
 
     async def get_effects(self) -> list[EffectSummary]: ...
 
-    async def get_scenes(self) -> list[Scene]: ...
-
-    async def get_profiles(self) -> list[ProfileSummary]: ...
+    async def get_scenes(self) -> list[SceneSummary]: ...
 
     async def get_layouts(self) -> list[LayoutSummary]: ...
 
-    async def get_effect_presets(self, effect_id: str) -> list[EffectPreset]: ...
+    async def get_effect_presets(self, effect_id: str) -> list[EffectPresetSummary]: ...
 
-    async def get_devices(self) -> list[Device]: ...
+    async def get_devices(self) -> list[DeviceSummary]: ...
 
-    async def get_audio_devices(self) -> AudioDevices: ...
+    async def get_audio_devices(self) -> AudioDevicesResponse: ...
 
-    def active_effect_cover_image_url(self) -> str: ...
+    def effect_cover_image_url(self, effect_id: str) -> str: ...
 
 
 class HypercolorCoordinator(DataUpdateCoordinator[HypercolorSnapshot]):
@@ -205,9 +212,9 @@ async def load_snapshot(
     load_audio: bool,
     previous: HypercolorSnapshot | None = None,
 ) -> HypercolorSnapshot:
-    active_effect_task = asyncio.create_task(client.get_active_effect())
-    state_task = load_state(client, active_effect=active_effect_task)
-    catalog_task = load_catalog(client, active_effect=active_effect_task)
+    scene_task = asyncio.create_task(client.get_live_scene())
+    state_task = load_state(client, scene=scene_task)
+    catalog_task = load_catalog(client, scene=scene_task)
     devices_task = client.get_devices()
     audio_task = client.get_audio_devices() if load_audio else _empty_audio()
     state, catalog, devices, audio_devices = await asyncio.gather(
@@ -233,65 +240,66 @@ async def load_snapshot(
 async def load_state(
     client: SnapshotClient,
     *,
-    active_effect: Awaitable[ActiveEffect | None] | None = None,
+    scene: Awaitable[SceneDocument] | None = None,
 ) -> HypercolorState:
-    active_effect_request = (
-        active_effect if active_effect is not None else client.get_active_effect()
-    )
-    status, active_effect_value, active_scene, active_layout = await asyncio.gather(
+    scene_request = scene if scene is not None else client.get_live_scene()
+    status, output, scene_document, active_layout = await asyncio.gather(
         client.get_status(),
-        active_effect_request,
-        client.get_active_scene(),
+        client.get_output(),
+        scene_request,
         client.get_active_layout(),
     )
-    cover_image_url = (
-        client.active_effect_cover_image_url()
-        if active_effect_value is not None and active_effect_value.cover_image_url
-        else None
-    )
+    layer = primary_effect_layer(scene_document)
+    active_effect = await _load_active_effect(client, layer) if layer is not None else None
     return HypercolorState(
         status=status,
-        active_effect=active_effect_value,
-        active_scene=active_scene,
+        output=output,
+        scene=scene_document,
         active_layout=active_layout,
-        active_effect_cover_image_url=cover_image_url,
+        active_effect=active_effect,
     )
 
 
 async def load_catalog(
     client: SnapshotClient,
     *,
-    active_effect: Awaitable[ActiveEffect | None] | None = None,
+    scene: Awaitable[SceneDocument] | None = None,
 ) -> HypercolorCatalog:
-    active_effect_request = (
-        active_effect if active_effect is not None else client.get_active_effect()
-    )
-    effects, scenes, profiles, layouts, preset_stack = await asyncio.gather(
+    scene_request = scene if scene is not None else client.get_live_scene()
+    effects, scenes, layouts, preset_stack = await asyncio.gather(
         client.get_effects(),
         client.get_scenes(),
-        client.get_profiles(),
         client.get_layouts(),
-        _load_effect_presets(client, active_effect_request),
+        _load_effect_presets(client, scene_request),
     )
     preset_effect_id, presets = preset_stack
     return HypercolorCatalog.build(
         effects=effects,
         scenes=scenes,
-        profiles=profiles,
         layouts=layouts,
         preset_effect_id=preset_effect_id,
         presets=presets,
     )
 
 
+async def _load_active_effect(client: SnapshotClient, layer: EffectLayer) -> ActiveEffect:
+    detail = await client.get_effect(layer.effect_id)
+    cover_image_url = (
+        client.effect_cover_image_url(layer.effect_id)
+        if isinstance(detail.cover_image_url, str) and detail.cover_image_url
+        else None
+    )
+    return ActiveEffect(layer=layer, detail=detail, cover_image_url=cover_image_url)
+
+
 async def _load_effect_presets(
     client: SnapshotClient,
-    active_effect: Awaitable[ActiveEffect | None],
-) -> tuple[str | None, list[EffectPreset]]:
-    effect = await active_effect
-    if effect is None:
+    scene: Awaitable[SceneDocument],
+) -> tuple[str | None, list[EffectPresetSummary]]:
+    layer = primary_effect_layer(await scene)
+    if layer is None:
         return None, []
-    return effect.id, await client.get_effect_presets(effect.id)
+    return layer.effect_id, await client.get_effect_presets(layer.effect_id)
 
 
 async def websocket_loop(runtime: HypercolorRuntimeData, options: dict[str, Any]) -> None:
@@ -421,5 +429,5 @@ def _mark_disconnected(
     runtime.coordinator.mark_disconnected(ConnectionSource.WEBSOCKET, error)
 
 
-async def _empty_audio() -> AudioDevices | None:
+async def _empty_audio() -> AudioDevicesResponse | None:
     return None

@@ -1,232 +1,248 @@
 from __future__ import annotations
 
-from typing import Any, cast
-
-import msgspec
-from hypercolor.models.device import DeviceConnection, DeviceOrigin, DevicePresentation
+from typing import Any
 
 from hypercolor.models import (
-    ActiveScene,
-    Device,
-    DeviceZone,
-    EffectPreset,
-    EffectPresetOrigin,
+    DeviceOrigin,
+    DeviceSummary,
+    DiagnoseResponse,
+    DriverPresentation,
+    EffectDetailResponse,
+    EffectPresetSummary,
     EffectSummary,
-    LayoutOutput,
     LayoutSummary,
-    NormalizedPosition,
-    ProfileSummary,
-    Scene,
+    SceneDocument,
+    SceneSummary,
+    SegmentSummary,
+    ServerInfo,
     SpatialLayout,
-    Zone,
+    SystemStatus,
+    ZoneMember,
+    ZoneResource,
 )
 
-type JsonObject = dict[str, Any]
+from .wire import JsonObject, minimal
+
+PRIMARY_ZONE_ID = "zone-primary"
+PRIMARY_LAYER_ID = "5d1a0a2e-3d7c-4a8c-9a3d-0f1e2b3c4d5e"
+COVER_PATH = "/api/v1/effects/{effect_id}/cover"
+
+_EFFECT_NAMES = {"rainbow": "Rainbow", "solid_color": "Solid Color"}
 
 
 def effects() -> list[JsonObject]:
     return [
-        _model(
-            EffectSummary(
-                id="rainbow",
-                name="Rainbow",
-                description="Test rainbow",
-                author="Hypercolor",
-                category="ambient",
-                source="builtin",
-                runnable=True,
-                version="1.0.0",
-                audio_reactive=False,
-                tags=["test"],
-            )
+        minimal(
+            EffectSummary,
+            id="rainbow",
+            name="Rainbow",
+            description="Test rainbow",
+            author="Hypercolor",
+            category="ambient",
+            source="html",
+            runnable=True,
+            version="1.0.0",
+            audio_reactive=False,
+            tags=["test"],
         ),
-        _model(
-            EffectSummary(
-                id="solid_color",
-                name="Solid Color",
-                description="Test solid color",
-                author="Hypercolor",
-                category="static",
-                source="builtin",
-                runnable=True,
-                version="1.0.0",
-                audio_reactive=False,
-                tags=["test"],
-            )
+        minimal(
+            EffectSummary,
+            id="solid_color",
+            name="Solid Color",
+            description="Test solid color",
+            author="Hypercolor",
+            category="utility",
+            source="html",
+            runnable=True,
+            version="1.0.0",
+            audio_reactive=False,
+            tags=["test"],
         ),
     ]
 
 
-def active_effect(
-    effect_id: str,
-    control_values: dict[str, Any],
-    active_preset_id: str | None,
-) -> JsonObject:
-    payload: JsonObject = {
-        "id": effect_id,
-        "name": effect_name(effect_id),
-        "state": "running" if effect_id else "idle",
-        "controls": [
-            _wire_control("speed", "Speed", 50.0),
-            _wire_control("brightness", "Brightness", 80.0),
+def effect_detail(effect_id: str) -> JsonObject:
+    return minimal(
+        EffectDetailResponse,
+        id=effect_id,
+        name=effect_name(effect_id),
+        description=f"Test {effect_name(effect_id).lower()}",
+        author="Hypercolor",
+        category="ambient",
+        source="html",
+        runnable=True,
+        version="1.0.0",
+        audio_reactive=False,
+        tags=["test"],
+        controls=[
+            wire_control("speed", "Speed", 50.0),
+            wire_control("brightness", "Brightness", 80.0),
         ],
-        "control_values": {
-            key: {"float": float(value)} if isinstance(value, (int, float)) else value
-            for key, value in control_values.items()
-        },
-        "active_preset_id": active_preset_id,
-        "render_group_id": "zone-primary",
-        "controls_version": 1,
-    }
-    if effect_id:
-        payload["cover_image_url"] = f"/api/v1/effects/{effect_id}/cover"
-    return payload
+        cover_image_url=COVER_PATH.format(effect_id=effect_id),
+    )
 
 
 def device() -> JsonObject:
-    return _model(
-        Device(
-            id="wled-studio",
-            layout_device_id="wled:c8c9a33a9091",
-            name="WLED - Studio",
-            origin=DeviceOrigin(driver_id="wled", backend_id="wled", transport="network"),
-            presentation=DevicePresentation(label="WLED", short_label="WLED", icon="lightbulb"),
-            status="known",
-            brightness=100,
-            firmware_version="0.15.0-b3",
-            connection=DeviceConnection(
-                transport="network",
-                endpoint="wled-studio.local",
-                ip="10.4.22.169",
-                hostname="wled-studio.local",
-            ),
-            total_leds=275,
-            zones=[
-                DeviceZone(
-                    id="zone_0",
-                    name="Main",
-                    led_count=275,
-                    topology="strip",
-                    topology_hint={"type": "strip"},
-                )
-            ],
-        )
+    return minimal(
+        DeviceSummary,
+        id="wled-studio",
+        layout_device_id="wled:c8c9a33a9091",
+        name="WLED - Studio",
+        origin=minimal(DeviceOrigin, driver_id="wled", backend_id="wled", transport="network"),
+        presentation=minimal(DriverPresentation, label="WLED", short_label="WLED"),
+        status="known",
+        brightness=100,
+        firmware_version="0.15.0-b3",
+        total_leds=275,
+        segments=[
+            minimal(SegmentSummary, id="zone_0", name="Main", led_count=275, topology="strip"),
+        ],
     )
 
 
-def scene() -> JsonObject:
-    return _model(Scene(id="default", name="Default"))
+def scene_summary() -> JsonObject:
+    return minimal(SceneSummary, id="default", name="Default")
 
 
-def active_scene(effect_id: str) -> JsonObject:
-    layout = SpatialLayout(
-        id="zone-layout",
+def zone(
+    effect_id: str,
+    control_values: dict[str, Any],
+    preset_id: str | None,
+    *,
+    brightness: float = 1.0,
+    enabled: bool = True,
+) -> JsonObject:
+    layers: list[JsonObject] = []
+    if effect_id:
+        source: JsonObject = {
+            "type": "effect",
+            "effect_id": effect_id,
+            "controls": {
+                key: value if isinstance(value, dict) else {"kind": "float", "value": float(value)}
+                for key, value in control_values.items()
+            },
+        }
+        if preset_id is not None:
+            source["preset_id"] = preset_id
+        layers.append({"id": PRIMARY_LAYER_ID, "source": source, "enabled": True})
+    return minimal(
+        ZoneResource,
+        id=PRIMARY_ZONE_ID,
         name="Default zone",
-        canvas_width=640,
-        canvas_height=480,
-        zones=[
-            LayoutOutput(
-                id="wled-studio:zone_0",
+        role="primary",
+        brightness=brightness,
+        enabled=enabled,
+        layers=layers,
+        members=[
+            minimal(
+                ZoneMember,
+                id="member-1",
+                device_id="wled:wled-studio",
                 name="WLED - Studio",
-                device_id="wled-studio",
-                zone_name="zone_0",
-                position=NormalizedPosition(x=0.5, y=0.5),
-                size=NormalizedPosition(x=1.0, y=1.0),
-                rotation=0.0,
-                topology={"type": "strip", "count": 275, "direction": "left_to_right"},
+                segment="zone_0",
             )
         ],
     )
-    return _model(
-        ActiveScene(
-            id="default",
-            name="Default",
-            priority=50,
-            kind="ephemeral",
-            groups=[
-                Zone(
-                    id="zone-primary",
-                    name="Default zone",
-                    effect_id=effect_id,
-                    layout=layout,
-                    brightness=1.0,
-                    enabled=True,
-                    role="primary",
-                    controls_version=1,
-                )
-            ],
-            groups_revision=2,
-        )
-    )
 
 
-def profile() -> JsonObject:
-    return _model(
-        ProfileSummary(
-            id="profile-default",
-            name="Default Profile",
-            brightness=80,
-            effect_id="rainbow",
-            effect_name="Rainbow",
-        )
+def scene_document(zones: list[JsonObject], *, revision: int = 2) -> JsonObject:
+    return minimal(
+        SceneDocument,
+        id="default",
+        name="Default",
+        kind="ephemeral",
+        is_default=True,
+        revision=revision,
+        zones=zones,
+        priority=50,
     )
 
 
 def layout_summary() -> JsonObject:
-    return _model(
-        LayoutSummary(
-            id="default",
-            name="Default Layout",
-            canvas_width=640,
-            canvas_height=480,
-            zone_count=1,
-            is_active=True,
-        )
+    return minimal(
+        LayoutSummary,
+        id="default",
+        name="Default Layout",
+        canvas_width=640,
+        canvas_height=480,
+        zone_count=1,
+        is_active=True,
     )
 
 
 def layout() -> JsonObject:
-    return _model(
-        SpatialLayout(
-            id="default",
-            name="Default Layout",
-            canvas_width=640,
-            canvas_height=480,
-        )
+    return minimal(
+        SpatialLayout,
+        id="default",
+        name="Default Layout",
+        canvas_width=640,
+        canvas_height=480,
+        version=1,
     )
 
 
 def effect_preset() -> JsonObject:
-    return _model(
-        EffectPreset(
-            id="preset-rainbow",
-            name="Rainbow Soft",
-            effect_id="rainbow",
-            origin=EffectPresetOrigin.BUNDLED,
-            editable=False,
-            description="A softer bundled look",
-            controls={"speed": 60},
-            tags=["test"],
-        )
+    return minimal(
+        EffectPresetSummary,
+        id="preset-rainbow",
+        name="Rainbow Soft",
+        effect_id="rainbow",
+        origin="bundled",
+        editable=False,
+        description="A softer bundled look",
+        controls={"speed": {"kind": "float", "value": 60.0}},
+        tags=["test"],
     )
 
 
+def identity() -> JsonObject:
+    return minimal(
+        ServerInfo,
+        instance_id="srv_e2e",
+        instance_name="Hyperia",
+        version="0.4.0",
+        auth_required=False,
+        device_count=1,
+    )
+
+
+def system_status(*, active_effect: str | None, brightness: int, paused: bool) -> JsonObject:
+    status = minimal(
+        SystemStatus,
+        running=True,
+        version="0.4.0",
+        device_count=1,
+        effect_count=2,
+        scene_count=1,
+        global_brightness=brightness,
+        audio_available=True,
+        capture_available=False,
+        uptime_seconds=42,
+        event_bus_subscribers=1,
+        active_effect=active_effect,
+        active_scene="Default",
+    )
+    status["render_loop"].update(
+        {"state": "paused" if paused else "running", "fps_tier": "30fps", "total_frames": 123}
+    )
+    return status
+
+
+def diagnostics() -> JsonObject:
+    return minimal(DiagnoseResponse)
+
+
 def effect_name(effect_id: str) -> str:
-    return {"rainbow": "Rainbow", "solid_color": "Solid Color"}.get(effect_id, effect_id)
+    return _EFFECT_NAMES.get(effect_id, effect_id)
 
 
-def _wire_control(control_id: str, name: str, default: float) -> JsonObject:
+def wire_control(control_id: str, name: str, default: float) -> JsonObject:
     return {
         "id": control_id,
         "name": name,
-        "kind": "number",
         "control_type": "slider",
-        "default_value": {"float": default},
+        "default_value": {"kind": "float", "value": default},
         "min": 0,
         "max": 100,
         "step": 1,
     }
-
-
-def _model(value: object) -> JsonObject:
-    return cast(JsonObject, msgspec.to_builtins(value))

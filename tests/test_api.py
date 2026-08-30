@@ -10,42 +10,39 @@ from custom_components.hypercolor.api import (
     _normalize_server_info,
     async_validate_daemon,
 )
+from tests.support import hypercolor_payloads as payloads
 
 
-def test_normalize_server_info_accepts_flat_generated_shape() -> None:
-    server = _normalize_server_info(
-        {
-            "instance_id": "srv_1",
-            "instance_name": "Hyperia",
-            "version": "0.1.0",
-            "auth_required": True,
-            "device_count": 3,
-        }
-    )
-
-    assert server.instance_id == "srv_1"
-    assert server.instance_name == "Hyperia"
-    assert server.auth_required is True
-    assert server.device_count == 3
-
-
-def test_normalize_server_info_accepts_daemon_identity_shape() -> None:
+def test_normalize_server_info_reads_the_system_identity_block() -> None:
     server = _normalize_server_info(
         {
             "identity": {
                 "instance_id": "srv_1",
                 "instance_name": "Hyperia",
-                "version": "0.1.0",
+                "version": "0.4.0",
+                "auth_required": True,
+                "device_count": 3,
             },
-            "auth_required": False,
-            "device_count": 2,
+            "status": None,
         }
     )
 
     assert server.instance_id == "srv_1"
     assert server.instance_name == "Hyperia"
-    assert server.version == "0.1.0"
-    assert server.auth_required is False
+    assert server.version == "0.4.0"
+    assert server.auth_required is True
+    assert server.device_count == 3
+
+
+def test_normalize_server_info_rejects_a_flat_legacy_shape() -> None:
+    with pytest.raises(KeyError):
+        _normalize_server_info(
+            {
+                "instance_id": "srv_1",
+                "instance_name": "Hyperia",
+                "version": "0.3.2",
+            }
+        )
 
 
 async def test_validate_daemon_rejects_malformed_payload() -> None:
@@ -63,22 +60,8 @@ async def test_validate_daemon_rejects_malformed_payload() -> None:
 
 async def test_validate_daemon_rejects_read_only_api_key() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/v1/server":
-            return httpx.Response(
-                200,
-                json={
-                    "data": {
-                        "identity": {
-                            "instance_id": "srv_1",
-                            "instance_name": "Hyperia",
-                            "version": "0.1.0",
-                        },
-                        "auth_required": True,
-                    }
-                },
-            )
-        if request.url.path == "/api/v1/effects":
-            return httpx.Response(200, json={"data": []})
+        if request.url.path == "/api/v1/system":
+            return _envelope({"identity": _identity(auth_required=True), "status": None})
         return httpx.Response(403, json={"error": {"code": "forbidden"}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -96,23 +79,11 @@ async def test_validate_daemon_uses_non_mutating_control_probe() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append((request.method, request.url.path))
-        if request.url.path == "/api/v1/server":
-            return httpx.Response(
-                200,
-                json={
-                    "data": {
-                        "identity": {
-                            "instance_id": "srv_1",
-                            "instance_name": "Hyperia",
-                            "version": "0.1.0",
-                        },
-                        "auth_required": True,
-                    }
-                },
-            )
-        if request.url.path == "/api/v1/output/power":
-            return httpx.Response(200, json={"data": {"state": "running"}})
-        return httpx.Response(200, json={"data": {"checks": {}}})
+        if request.url.path == "/api/v1/system":
+            return _envelope({"identity": _identity(auth_required=True), "status": None})
+        if request.url.path == "/api/v1/output":
+            return _envelope({"power": "running", "brightness": 0.8})
+        return _envelope(payloads.diagnostics())
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         server = await async_validate_daemon(
@@ -124,28 +95,16 @@ async def test_validate_daemon_uses_non_mutating_control_probe() -> None:
 
     assert server.instance_id == "srv_1"
     assert requests == [
-        ("GET", "/api/v1/server"),
-        ("GET", "/api/v1/output/power"),
+        ("GET", "/api/v1/system"),
+        ("GET", "/api/v1/output"),
         ("POST", "/api/v1/diagnose"),
     ]
 
 
-async def test_validate_daemon_rejects_missing_output_power_contract() -> None:
+async def test_validate_daemon_rejects_missing_output_contract() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/v1/server":
-            return httpx.Response(
-                200,
-                json={
-                    "data": {
-                        "identity": {
-                            "instance_id": "srv_1",
-                            "instance_name": "Hyperia",
-                            "version": "0.1.0",
-                        },
-                        "auth_required": True,
-                    }
-                },
-            )
+        if request.url.path == "/api/v1/system":
+            return _envelope({"identity": _identity(auth_required=True), "status": None})
         return httpx.Response(404, json={"error": {"code": "not_found"}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -156,3 +115,23 @@ async def test_validate_daemon_rejects_missing_output_power_contract() -> None:
                 port=9420,
                 api_key="hc_ak_control",
             )
+
+
+def _identity(*, auth_required: bool) -> dict[str, object]:
+    identity = payloads.identity()
+    identity.update({"instance_id": "srv_1", "auth_required": auth_required})
+    return identity
+
+
+def _envelope(data: object) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "data": data,
+            "meta": {
+                "api_version": "1.0",
+                "request_id": "req_test",
+                "timestamp": "2026-08-29T00:00:00Z",
+            },
+        },
+    )

@@ -49,8 +49,8 @@ One daemon, every RGB device on your desk, all painted by the same effect at 60f
 are web pages, rendered headless and sampled onto your physical LED layout every frame.
 
 This integration brings that engine into Home Assistant as a hub. Master light, scenes,
-profiles, layouts, live controls, audio-reactive primitives, and full device topology
-become first-class entities you can wire into automations, scripts, and dashboards.
+layouts, live controls, audio-reactive primitives, and full device topology become
+first-class entities you can wire into automations, scripts, and dashboards.
 
 The companion Lovelace card is [hyper-light-card](https://github.com/hyperb1iss/hyper-light-card),
 built directly on this integration's catalog, live controls, and effect cover art.
@@ -61,7 +61,7 @@ built directly on this integration's catalog, live controls, and effect cover ar
 | - | - |
 | 💎 **Master light** | brightness + effect picker, with the daemon's stable id available as an attribute for templates |
 | 🦋 **Per-device lights** | opt in any device to its own light entity, registered as a child of the hub |
-| 🌊 **Scenes & profiles** | activate scenes, apply profiles, save the current state as a new profile, all from a service |
+| 🌊 **Scenes** | activate scenes, or snapshot the live scene into a saved one, all from a service |
 | 🎯 **Layouts & presets** | select from spatial layouts and per-effect presets, exposed as native select entities |
 | 🪄 **Live controls** | brightness, speed, hue shift, and intensity as Home Assistant number sliders that patch the running effect |
 | 🌙 **Audio reactivity** | binary sensor for beat events with configurable hold, sensor for energy, switch to toggle audio capture |
@@ -74,7 +74,8 @@ built directly on this integration's catalog, live controls, and effect cover ar
 
 - Home Assistant **2026.4.4** or newer
 - Python **3.14.2 through 3.14.x** (HA's runtime range for this release)
-- A reachable Hypercolor daemon (default port `9420`)
+- A reachable Hypercolor daemon (default port `9420`) that serves the `/api/v1/scene`
+  and `/api/v1/output` resources, which means any build newer than 0.3.2
 - Optional: an API key, if your daemon has auth turned on
 
 The daemon is the actual lighting engine, [hyperb1iss/hypercolor](https://github.com/hyperb1iss/hypercolor).
@@ -129,17 +130,16 @@ uses that product and instance name for its entity namespace:
 | `binary_sensor.hypercolor_hyperia_connected` | binary_sensor | live connectivity to the daemon |
 | `sensor.hypercolor_hyperia_active_effect` | sensor | display name of the running effect |
 | `select.hypercolor_hyperia_scene` | select | activate a scene |
-| `select.hypercolor_hyperia_profile` | select | apply a profile |
 | `select.hypercolor_hyperia_layout` | select | switch spatial layouts |
 | `select.hypercolor_hyperia_preset` | select | apply a preset to the current effect |
 | `button.hypercolor_hyperia_previous_effect` / `next_effect` / `random_effect` | button | walk the catalog |
-| `button.hypercolor_hyperia_stop_effect` | button | clear the current effect |
+| `button.hypercolor_hyperia_stop_effect` | button | clear every renderable zone in the live scene |
 | `button.hypercolor_hyperia_discover_devices` | button | re-run device discovery |
 | `number.hypercolor_hyperia_brightness` / `speed` / `hue_shift` / `intensity` | number | live patches into the running effect |
 
-Turning the master light off pauses output without discarding the active effect, preset,
-or controls. Turning it back on resumes that exact state. The Stop button is the separate,
-destructive action that clears the active effect.
+Turning the master light off pauses output without discarding the live scene, its
+preset, or its controls. Turning it back on resumes that exact state. The Stop button is
+the separate, destructive action that empties the live scene's zones.
 
 ### Optional channels
 
@@ -166,9 +166,9 @@ rich effect info and a full control surface without walking every companion enti
 | `effect_description` / `effect_publisher` | catalog description and author of the running effect |
 | `effect_tags` / `effect_category` / `effect_version` | catalog metadata for the running effect |
 | `effect_audio_reactive` | whether the running effect reacts to audio |
-| `effect_controls` | normalized control descriptors (`id`, `label`, `kind`, `min`/`max`/`step`, `value`, `options`) for every control the running effect exposes |
+| `effect_controls` | normalized control descriptors (`id`, `label`, `kind`, `min`/`max`/`step`, `value`, `options`) for every control the running effect exposes, with `value` read from the live layer |
 | `effect_image` / `active_effect_cover_image_url` | cover art URL for palette extraction |
-| `active_preset_id` / `active_preset_modified` | selected preset derivation and whether live controls diverged from it |
+| `active_preset_id` | the preset the running layer was applied from, if any |
 | `active_scene` / `active_scene_id` / `zone_count` / `scene_count` / `device_count` | scene and topology context |
 
 ### Live controls
@@ -182,17 +182,16 @@ the `hypercolor.set_control` service.
 
 ## 🪄 Services
 
-Twenty services cover Hypercolor's Home Assistant automation surface. All of them take
+Nineteen services cover Hypercolor's Home Assistant automation surface. All of them take
 `config_entry_id` so multi-daemon setups stay unambiguous.
 
 | Service | What it does |
 | --- | --- |
 | `hypercolor.apply_effect` | apply an effect by id, optionally with controls, transition, or an effect-scoped preset id |
 | `hypercolor.set_color` | shortcut for the `solid_color` effect, takes `hex` or `r/g/b` |
-| `hypercolor.set_control` | patch a single control on the running effect |
-| `hypercolor.activate_scene` / `deactivate_scene` / `create_scene` | activate, deactivate, or create a scene |
-| `hypercolor.set_zone` / `list_zones` / `set_unassigned_behavior` | inspect and configure scene zones |
-| `hypercolor.activate_profile` / `save_profile` | activate or capture a profile |
+| `hypercolor.set_control` | patch a single control on the running effect's live layer |
+| `hypercolor.activate_scene` / `deactivate_scene` / `create_scene` / `snapshot_scene` | activate, deactivate, or create a scene, or capture the live scene as a saved one |
+| `hypercolor.set_zone` / `list_zones` / `set_unassigned_behavior` | inspect and configure the live scene's zones |
 | `hypercolor.apply_layout` | switch spatial layouts |
 | `hypercolor.apply_preset` | apply a bundled or saved preset by `effect_id` and `preset_id` |
 | `hypercolor.save_preset` / `delete_preset` / `list_presets` | manage saved presets and list the active effect's unified preset stack |

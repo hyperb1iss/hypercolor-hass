@@ -6,7 +6,6 @@ from typing import Any, cast
 
 import pytest
 from homeassistant.helpers.update_coordinator import UpdateFailed
-from hypercolor.models.system import RenderLoopStatus
 from hypercolor.websocket import EventMessage, MetricsMessage, SpectrumData
 from websockets.datastructures import Headers
 from websockets.exceptions import InvalidStatus
@@ -31,23 +30,24 @@ from custom_components.hypercolor.runtime_data import (
 )
 from hypercolor import HypercolorAuthenticationError, HypercolorConnectionError
 from hypercolor.models import (
-    ActiveEffect,
-    ActiveScene,
-    AudioDevices,
-    Device,
-    EffectPreset,
-    EffectPresetOrigin,
+    AudioDevicesResponse,
+    DeviceSummary,
+    EffectDetailResponse,
+    EffectPresetSummary,
     EffectSummary,
     LayoutSummary,
-    ProfileSummary,
-    Scene,
-    ServerIdentity,
+    OutputResource,
+    SceneDocument,
+    SceneSummary,
     SpatialLayout,
-    SystemState,
+    SystemStatus,
 )
+from tests.support import hypercolor_payloads as payloads
+from tests.support.hypercolor_payloads import PRIMARY_LAYER_ID, PRIMARY_ZONE_ID
+from tests.support.wire import minimal
 
 
-async def test_load_state_joins_active_resources_concurrently() -> None:
+async def test_load_state_reads_the_live_scene_tree() -> None:
     client = SnapshotClientFixture()
 
     state = await load_state(client)
@@ -55,13 +55,18 @@ async def test_load_state_joins_active_resources_concurrently() -> None:
     assert state.active_effect_id == "aurora"
     assert state.active_effect_name == "Aurora"
     assert state.active_preset_id == "soft"
-    assert state.active_scene is not None
-    assert state.active_scene.id == "scene-1"
+    assert state.active_effect is not None
+    assert state.active_effect.zone_id == PRIMARY_ZONE_ID
+    assert state.active_effect.layer_id == PRIMARY_LAYER_ID
+    assert state.scene.id == "scene-1"
     assert state.active_layout is not None
     assert state.active_layout.id == "layout-1"
+    assert state.brightness == 0.66
+    assert state.paused is False
     assert state.active_effect_cover_image_url is not None
-    assert state.active_effect_cover_image_url.endswith("/effects/active/cover")
+    assert state.active_effect_cover_image_url.endswith("/effects/aurora/cover")
     assert client.max_in_flight == 4
+    assert client.effect_lookups == ["aurora"]
 
 
 async def test_load_state_never_uses_display_name_as_effect_id() -> None:
@@ -72,6 +77,7 @@ async def test_load_state_never_uses_display_name_as_effect_id() -> None:
     assert state.active_effect_id is None
     assert state.active_effect_name == "Aurora"
     assert state.active_effect_cover_image_url is None
+    assert client.effect_lookups == []
 
 
 async def test_load_catalog_builds_unique_picker_indexes_concurrently() -> None:
@@ -81,20 +87,8 @@ async def test_load_catalog_builds_unique_picker_indexes_concurrently() -> None:
         _effect("aurora-v2", "Aurora"),
     ]
     client.presets = [
-        EffectPreset(
-            id="soft-bundled",
-            name="Soft",
-            effect_id="aurora",
-            origin=EffectPresetOrigin.BUNDLED,
-            editable=False,
-        ),
-        EffectPreset(
-            id="soft-saved",
-            name="Soft",
-            effect_id="aurora",
-            origin=EffectPresetOrigin.SAVED,
-            editable=True,
-        ),
+        _preset("soft-bundled", "Soft", origin="bundled"),
+        _preset("soft-saved", "Soft", origin="saved"),
     ]
 
     catalog = await load_catalog(client)
@@ -103,13 +97,13 @@ async def test_load_catalog_builds_unique_picker_indexes_concurrently() -> None:
     assert catalog.effects.resolve("Aurora (aurora-v2)") == "aurora-v2"
     assert catalog.preset_effect_id == "aurora"
     assert catalog.presets.options == ["Soft (Built-in)", "Soft (Saved)"]
-    assert client.max_in_flight == 5
+    assert client.max_in_flight == 4
 
 
 async def test_snapshot_hides_preset_stack_from_a_newer_effect() -> None:
     client = SnapshotClientFixture()
     state = await load_state(client)
-    client.active_effect = ActiveEffect(id="rainbow", name="Rainbow", state="running")
+    client.scene = _scene("rainbow", preset_id=None)
     client.presets = []
 
     catalog = await load_catalog(client)
@@ -123,17 +117,7 @@ async def test_snapshot_hides_preset_stack_from_a_newer_effect() -> None:
 async def test_rest_refresh_preserves_websocket_telemetry() -> None:
     client = SnapshotClientFixture()
     initial = await load_snapshot(client, load_audio=True)
-    spectrum = SpectrumData(
-        timestamp_ms=123,
-        bin_count=2,
-        level=0.8,
-        bass=0.7,
-        mid=0.4,
-        treble=0.2,
-        beat=True,
-        beat_confidence=0.9,
-        bins=[0.7, 0.2],
-    )
+    spectrum = _spectrum()
     streamed = initial.with_metrics({"fps": {"actual": 59.8}}).with_spectrum(
         spectrum,
         42.0,
@@ -153,11 +137,13 @@ def test_event_refresh_filter_covers_state_bearing_daemon_taxonomy() -> None:
         "effect_degraded",
         "control_surface_changed",
         "scene_enabled",
+        "zone_changed",
         "layer_stack_changed",
+        "active_scene_changed",
         "audio_source_changed",
-        "profile_loaded",
         "asset_changed",
-        "layout_updated",
+        "brightness_changed",
+        "paused",
         "config_changed",
     ):
         assert event_requires_refresh(event) is True
@@ -165,8 +151,10 @@ def test_event_refresh_filter_covers_state_bearing_daemon_taxonomy() -> None:
     for event in (
         "audio_level_update",
         "beat_detected",
-        "device_metrics",
+        "fps_changed",
         "frame_rendered",
+        "input_event_received",
+        "profile_loaded",
         "future_unknown",
     ):
         assert event_requires_refresh(event) is False
@@ -335,17 +323,7 @@ async def test_websocket_messages_preserve_typed_push_telemetry(
         ),
         {},
     )
-    spectrum = SpectrumData(
-        timestamp_ms=123,
-        bin_count=2,
-        level=0.8,
-        bass=0.7,
-        mid=0.4,
-        treble=0.2,
-        beat=True,
-        beat_confidence=0.9,
-        bins=[0.7, 0.2],
-    )
+    spectrum = _spectrum()
     await _process_ws_message(runtime, spectrum, {"audio_beat_hold_ms": 200})
     await _process_ws_message(
         runtime,
@@ -367,81 +345,79 @@ async def test_websocket_messages_preserve_typed_push_telemetry(
 
 class SnapshotClientFixture:
     def __init__(self, *, with_active_effect: bool = True) -> None:
-        self.status = _status()
-        self.active_effect = (
-            ActiveEffect(
-                id="aurora",
-                name="Aurora",
-                state="running",
-                active_preset_id="soft",
-                cover_image_url="/api/v1/effects/aurora/cover",
-            )
-            if with_active_effect
-            else None
+        self.status = SystemStatus.from_dict(
+            payloads.system_status(active_effect="Aurora", brightness=66, paused=False)
         )
-        self.active_scene = ActiveScene(id="scene-1", name="Battlestation")
-        self.active_layout = SpatialLayout(
-            id="layout-1",
-            name="Desk",
-            canvas_width=640,
-            canvas_height=480,
+        self.output = OutputResource.from_dict({"power": "running", "brightness": 0.66})
+        self.scene = _scene("aurora" if with_active_effect else "", preset_id="soft")
+        self.active_layout = SpatialLayout.from_dict(
+            minimal(
+                SpatialLayout,
+                id="layout-1",
+                name="Desk",
+                canvas_width=640,
+                canvas_height=480,
+                version=1,
+            )
         )
         self.effects = [_effect("aurora", "Aurora")]
-        self.scenes = [Scene(id="scene-1", name="Battlestation")]
-        self.profiles = [ProfileSummary(id="profile-1", name="Default")]
+        self.scenes = [SceneSummary.from_dict(minimal(SceneSummary, id="scene-1", name="Desk"))]
         self.layouts = [
-            LayoutSummary(id="layout-1", name="Desk", canvas_width=640, canvas_height=480)
-        ]
-        self.presets = [
-            EffectPreset(
-                id="soft",
-                name="Soft",
-                effect_id="aurora",
-                origin=EffectPresetOrigin.BUNDLED,
-                editable=False,
+            LayoutSummary.from_dict(
+                minimal(
+                    LayoutSummary,
+                    id="layout-1",
+                    name="Desk",
+                    canvas_width=640,
+                    canvas_height=480,
+                    zone_count=1,
+                )
             )
         ]
-        self.audio_devices = AudioDevices(current="none")
+        self.presets = [_preset("soft", "Soft", origin="bundled")]
+        self.audio_devices = AudioDevicesResponse.from_dict({"current": "none", "devices": []})
+        self.effect_lookups: list[str] = []
         self.in_flight = 0
         self.max_in_flight = 0
 
-    async def get_status(self) -> SystemState:
+    async def get_status(self) -> SystemStatus:
         return await self._load(self.status)
 
-    async def get_active_effect(self) -> ActiveEffect | None:
-        return await self._load(self.active_effect)
+    async def get_output(self) -> OutputResource:
+        return await self._load(self.output)
 
-    async def get_active_scene(self) -> ActiveScene | None:
-        return await self._load(self.active_scene)
+    async def get_live_scene(self) -> SceneDocument:
+        return await self._load(self.scene)
 
     async def get_active_layout(self) -> SpatialLayout | None:
         return await self._load(self.active_layout)
 
+    async def get_effect(self, effect_id: str) -> EffectDetailResponse:
+        self.effect_lookups.append(effect_id)
+        detail = payloads.effect_detail(effect_id)
+        detail["name"] = effect_id.title()
+        return await self._load(EffectDetailResponse.from_dict(detail))
+
     async def get_effects(self) -> list[EffectSummary]:
         return await self._load(self.effects)
 
-    async def get_scenes(self) -> list[Scene]:
+    async def get_scenes(self) -> list[SceneSummary]:
         return await self._load(self.scenes)
-
-    async def get_profiles(self) -> list[ProfileSummary]:
-        return await self._load(self.profiles)
 
     async def get_layouts(self) -> list[LayoutSummary]:
         return await self._load(self.layouts)
 
-    async def get_effect_presets(self, effect_id: str) -> list[EffectPreset]:
-        assert self.active_effect is not None
-        assert effect_id == self.active_effect.id
+    async def get_effect_presets(self, effect_id: str) -> list[EffectPresetSummary]:
         return await self._load(self.presets)
 
-    async def get_devices(self) -> list[Device]:
+    async def get_devices(self) -> list[DeviceSummary]:
         return await self._load([])
 
-    async def get_audio_devices(self) -> AudioDevices:
+    async def get_audio_devices(self) -> AudioDevicesResponse:
         return await self._load(self.audio_devices)
 
-    def active_effect_cover_image_url(self) -> str:
-        return "http://hyperia.test:9420/api/v1/effects/active/cover"
+    def effect_cover_image_url(self, effect_id: str) -> str:
+        return f"http://hyperia.test:9420/api/v1/effects/{effect_id}/cover"
 
     async def _load[ValueT](self, value: ValueT) -> ValueT:
         self.in_flight += 1
@@ -498,37 +474,56 @@ def _repair_coordinator(
     return coordinator
 
 
-def _status() -> SystemState:
-    return SystemState(
-        running=True,
-        version="0.3.1",
-        server=ServerIdentity(instance_id="srv-1", instance_name="Hyperia", version="0.3.1"),
-        config_path="/config",
-        data_dir="/data",
-        cache_dir="/cache",
-        uptime_seconds=12,
-        device_count=2,
-        effect_count=3,
-        scene_count=1,
-        global_brightness=66,
-        audio_available=True,
-        capture_available=False,
-        render_loop=RenderLoopStatus(state="running", fps_tier="full", total_frames=10),
-        event_bus_subscribers=1,
-        active_effect="Aurora",
+def _scene(effect_id: str, *, preset_id: str | None) -> SceneDocument:
+    document = payloads.scene_document(
+        [payloads.zone(effect_id, {"speed": 72.0}, preset_id)],
     )
+    document["id"] = "scene-1"
+    document["name"] = "Battlestation"
+    return SceneDocument.from_dict(document)
 
 
 def _effect(effect_id: str, name: str) -> EffectSummary:
-    return EffectSummary(
-        id=effect_id,
-        name=name,
-        description="Cascading neon",
-        author="Aurora Labs",
-        category="ambient",
-        source="builtin",
-        runnable=True,
-        version="1.2.0",
-        audio_reactive=True,
-        tags=["cyberpunk", "rain"],
+    return EffectSummary.from_dict(
+        minimal(
+            EffectSummary,
+            id=effect_id,
+            name=name,
+            description="Cascading neon",
+            author="Aurora Labs",
+            category="ambient",
+            source="html",
+            runnable=True,
+            version="1.2.0",
+            audio_reactive=True,
+            tags=["cyberpunk", "rain"],
+        )
+    )
+
+
+def _preset(preset_id: str, name: str, *, origin: str) -> EffectPresetSummary:
+    return EffectPresetSummary.from_dict(
+        minimal(
+            EffectPresetSummary,
+            id=preset_id,
+            name=name,
+            effect_id="aurora",
+            origin=origin,
+            editable=origin == "saved",
+            controls={},
+        )
+    )
+
+
+def _spectrum() -> SpectrumData:
+    return SpectrumData(
+        timestamp_ms=123,
+        bin_count=2,
+        level=0.8,
+        bass=0.7,
+        mid=0.4,
+        treble=0.2,
+        beat=True,
+        beat_confidence=0.9,
+        bins=[0.7, 0.2],
     )

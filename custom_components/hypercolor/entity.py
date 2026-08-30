@@ -11,7 +11,7 @@ from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 from homeassistant.util import slugify
 
-from hypercolor.models import Device
+from hypercolor.models import DeviceSummary
 
 from .const import (
     CONF_DISCONNECT_GRACE_S,
@@ -29,7 +29,7 @@ class DeviceEntityFactory(Protocol):
     def __call__(
         self,
         entry: ConfigEntry[HypercolorRuntimeData],
-        device: Device,
+        device: DeviceSummary,
     ) -> Any: ...
 
 
@@ -152,7 +152,7 @@ class HypercolorDeviceEntity(HypercolorEntity):
     def __init__(
         self,
         entry: ConfigEntry[HypercolorRuntimeData],
-        device: Device,
+        device: DeviceSummary,
     ) -> None:
         super().__init__(entry)
         self._device_id = device.id
@@ -163,7 +163,7 @@ class HypercolorDeviceEntity(HypercolorEntity):
         return super().available and self._device is not None
 
     @property
-    def _device(self) -> Device | None:
+    def _device(self) -> DeviceSummary | None:
         return self.snapshot.device(self._device_id)
 
 
@@ -207,19 +207,23 @@ def hub_device_name(instance_name: str) -> str:
     return f"{NAME} {instance_name}"
 
 
-def child_device_info(runtime: HypercolorRuntimeData, device: Device) -> DeviceInfo:
+def child_device_info(runtime: HypercolorRuntimeData, device: DeviceSummary) -> DeviceInfo:
     return DeviceInfo(
         identifiers={(DOMAIN, child_device_identifier(runtime, device.id))},
         name=device.name,
         manufacturer="Hypercolor",
-        model=device.backend,
-        sw_version=device.firmware_version,
+        model=device.presentation.label,
+        sw_version=_optional_str(device.firmware_version),
         via_device=(DOMAIN, runtime.server.instance_id),
     )
 
 
 def child_device_identifier(runtime: HypercolorRuntimeData, device_id: str) -> str:
     return f"{runtime.server.instance_id}:device:{device_id}"
+
+
+def _optional_str(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def device_slug(device_id: str) -> str:

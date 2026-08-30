@@ -6,11 +6,12 @@ from custom_components.hypercolor.const import DOMAIN
 from custom_components.hypercolor.services import CONF_CONFIG_ENTRY_ID, SERVICE_SET_COLOR
 from tests.support.hass import first_state, setup_entry
 from tests.support.hypercolor_daemon import FakeHypercolorDaemon
+from tests.support.hypercolor_payloads import PRIMARY_LAYER_ID, PRIMARY_ZONE_ID
 
 pytest_plugins = ("tests.support.fixtures",)
 
 
-async def test_config_entry_boots_and_controls_fake_daemon(
+async def test_master_light_and_presets_drive_the_fake_daemon(
     hass: HomeAssistant,
     enable_custom_integrations: None,
     fake_daemon: FakeHypercolorDaemon,
@@ -20,15 +21,12 @@ async def test_config_entry_boots_and_controls_fake_daemon(
     master = first_state(hass, "light", lambda state: state.attributes.get("effect") == "Rainbow")
     assert master.state == "on"
     assert master.attributes["active_effect_id"] == "rainbow"
-    assert (
-        master.attributes["active_effect_cover_image_url"]
-        == f"http://127.0.0.1:{fake_daemon.port}/api/v1/effects/active/cover"
-    )
-    assert (
-        master.attributes["effect_image"]
-        == f"http://127.0.0.1:{fake_daemon.port}/api/v1/effects/active/cover"
-    )
+    cover_url = f"http://127.0.0.1:{fake_daemon.port}/api/v1/effects/rainbow/cover"
+    assert master.attributes["active_effect_cover_image_url"] == cover_url
+    assert master.attributes["effect_image"] == cover_url
     assert "Solid Color" in master.attributes["effect_list"]
+    assert master.attributes["active_scene_id"] == "default"
+    assert master.attributes["zone_count"] == 1
 
     assert master.attributes["effect_description"] == "Test rainbow"
     assert master.attributes["effect_publisher"] == "Hypercolor"
@@ -38,6 +36,7 @@ async def test_config_entry_boots_and_controls_fake_daemon(
     controls_by_id = {control["id"]: control for control in master.attributes["effect_controls"]}
     assert {"speed", "brightness"} <= set(controls_by_id)
     assert controls_by_id["speed"]["kind"] == "number"
+    assert controls_by_id["speed"]["value"] == 60.0
 
     preset_select = first_state(
         hass,
@@ -53,7 +52,7 @@ async def test_config_entry_boots_and_controls_fake_daemon(
     )
     assert fake_daemon.applied_effects[-1] == {
         "effect_id": "rainbow",
-        "controls": {"speed": 60},
+        "controls": {"speed": 60.0},
         "preset_id": "preset-rainbow",
     }
 
@@ -67,11 +66,17 @@ async def test_config_entry_boots_and_controls_fake_daemon(
         blocking=True,
     )
 
-    assert fake_daemon.control_updates[-1] == {"speed": 35.0}
+    assert fake_daemon.control_updates[-1] == {
+        "zone": PRIMARY_ZONE_ID,
+        "layer": PRIMARY_LAYER_ID,
+        "values": {"speed": 35.0},
+    }
+    speed = hass.states.get(speed.entity_id)
+    assert speed is not None
+    assert float(speed.state) == 35.0
     preset_select = hass.states.get(preset_select.entity_id)
     assert preset_select is not None
     assert preset_select.state == "Rainbow Soft"
-    assert preset_select.attributes["active_preset_modified"] is True
 
     await hass.services.async_call(
         "light",
@@ -95,18 +100,30 @@ async def test_config_entry_boots_and_controls_fake_daemon(
         blocking=True,
     )
 
-    assert fake_daemon.applied_effects[-1] == {
-        "effect_id": "solid_color",
-        "controls": {"color": "#80ff00"},
-    }
+    applied = fake_daemon.applied_effects[-1]
+    assert applied["effect_id"] == "solid_color"
+    assert applied["controls"]["color"]["kind"] == "color_linear"
+    assert applied["controls"]["color"]["value"]["g"] == 1.0
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_zone_light_patches_the_live_zone(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    fake_daemon: FakeHypercolorDaemon,
+) -> None:
+    fake_daemon.active_effect_id = "solid_color"
+    entry = await setup_entry(hass, port=fake_daemon.port)
 
     zone = first_state(
-        hass, "light", lambda state: state.attributes.get("zone_id") == "zone-primary"
+        hass, "light", lambda state: state.attributes.get("zone_id") == PRIMARY_ZONE_ID
     )
     assert zone.state == "on"
     assert zone.attributes["role"] == "primary"
     assert zone.attributes["scene_id"] == "default"
-    assert zone.attributes["output_count"] == 1
+    assert zone.attributes["effect_id"] == "solid_color"
+    assert zone.attributes["layer_count"] == 1
+    assert zone.attributes["member_count"] == 1
 
     await hass.services.async_call(
         "light",
@@ -116,14 +133,13 @@ async def test_config_entry_boots_and_controls_fake_daemon(
     )
 
     assert fake_daemon.zone_updates[-1] == {
-        "scene_id": "default",
-        "zone_id": "zone-primary",
+        "zone_id": PRIMARY_ZONE_ID,
         "brightness": 0.502,
     }
     assert fake_daemon.applied_effects[-1] == {
         "effect_id": "rainbow",
         "controls": {},
-        "render_group": "zone-primary",
+        "zone": PRIMARY_ZONE_ID,
     }
 
     await hass.services.async_call(
@@ -134,8 +150,10 @@ async def test_config_entry_boots_and_controls_fake_daemon(
     )
 
     assert fake_daemon.zone_updates[-1] == {
-        "scene_id": "default",
-        "zone_id": "zone-primary",
+        "zone_id": PRIMARY_ZONE_ID,
         "enabled": False,
     }
+    zone = hass.states.get(zone.entity_id)
+    assert zone is not None
+    assert zone.state == "off"
     assert await hass.config_entries.async_unload(entry.entry_id)

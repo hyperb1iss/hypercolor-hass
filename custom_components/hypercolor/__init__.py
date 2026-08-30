@@ -15,7 +15,7 @@ from homeassistant.helpers import (
 from homeassistant.helpers.httpx_client import get_async_client
 
 from hypercolor import HypercolorClient
-from hypercolor.models import Device
+from hypercolor.models import DeviceSummary
 
 from .api import (
     CannotConnectError,
@@ -37,7 +37,7 @@ from .coordinator import (
     reconcile_loop,
     websocket_loop,
 )
-from .entity import child_device_identifier, hub_device_info
+from .entity import child_device_info, hub_device_info
 from .models import HypercolorState
 from .runtime_data import ConnectionSource, ConnectionState, HypercolorRuntimeData
 from .services import async_setup_services
@@ -67,7 +67,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HypercolorConfigEntry) -
         raise ConfigEntryAuthFailed from exc
     except UnsupportedDaemonError as exc:
         raise ConfigEntryError(
-            "The Hypercolor daemon does not support persistent output pause"
+            "The Hypercolor daemon does not expose the output resource"
         ) from exc
 
     client = HypercolorClient(
@@ -195,7 +195,7 @@ async def async_remove_config_entry_device(
 def _register_child_devices(
     hass: HomeAssistant,
     entry: HypercolorConfigEntry,
-    devices: tuple[Device, ...],
+    devices: tuple[DeviceSummary, ...],
 ) -> None:
     device_registry = dr.async_get(hass)
     runtime = entry.runtime_data
@@ -204,17 +204,11 @@ def _register_child_devices(
         **hub_device_info(runtime, entry.data),
     )
     for device in devices:
-        device_id = device.id
-        if not device_id:
+        if not device.id:
             continue
         device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
-            identifiers={(DOMAIN, child_device_identifier(runtime, device_id))},
-            name=device.name,
-            manufacturer="Hypercolor",
-            model=device.backend,
-            sw_version=device.firmware_version,
-            via_device=(DOMAIN, runtime.server.instance_id),
+            **child_device_info(runtime, device),
         )
 
 

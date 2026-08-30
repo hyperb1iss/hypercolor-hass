@@ -44,17 +44,17 @@ async def async_validate_daemon(
 ) -> ServerInfo:
     root_url = f"http://{host}:{port}"
     try:
-        server_response = await httpx_client.get(f"{root_url}/api/v1/server")
+        system_response = await httpx_client.get(f"{root_url}/api/v1/system")
     except httpx.HTTPError as exc:
         raise CannotConnectError from exc
 
-    if server_response.status_code == httpx.codes.UNAUTHORIZED:
+    if system_response.status_code == httpx.codes.UNAUTHORIZED:
         raise InvalidAuthError
-    if server_response.status_code >= httpx.codes.BAD_REQUEST:
+    if system_response.status_code >= httpx.codes.BAD_REQUEST:
         raise CannotConnectError
 
     try:
-        server_info = _normalize_server_info(_server_payload(server_response.json()))
+        server_info = _normalize_server_info(_system_payload(system_response.json()))
     except (KeyError, TypeError, ValueError) as exc:
         raise CannotConnectError from exc
 
@@ -65,7 +65,7 @@ async def async_validate_daemon(
         httpx_client=httpx_client,
     )
     try:
-        await client.get_output_power()
+        await client.get_output()
     except (HypercolorError, httpx.HTTPError, TypeError, ValueError) as exc:
         _raise_client_validation_error(exc, unsupported_not_found=True)
 
@@ -92,7 +92,7 @@ def _raise_client_validation_error(
     raise CannotConnectError from error
 
 
-def _server_payload(payload: Any) -> dict[str, Any]:
+def _system_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise TypeError
     data = payload.get("data", payload)
@@ -102,20 +102,14 @@ def _server_payload(payload: Any) -> dict[str, Any]:
 
 
 def _normalize_server_info(data: dict[str, Any]) -> ServerInfo:
-    identity = data.get("identity")
-    if isinstance(identity, dict):
-        instance_id = str(identity["instance_id"])
-        instance_name = str(identity["instance_name"])
-        version = str(identity["version"])
-    else:
-        instance_id = str(data["instance_id"])
-        instance_name = str(data["instance_name"])
-        version = str(data["version"])
-
+    """Read the public identity block of the ``/api/v1/system`` resource."""
+    identity = data["identity"]
+    if not isinstance(identity, dict):
+        raise TypeError
     return ServerInfo(
-        instance_id=instance_id,
-        instance_name=instance_name,
-        version=version,
-        auth_required=bool(data.get("auth_required", False)),
-        device_count=int(data.get("device_count", 0)),
+        instance_id=str(identity["instance_id"]),
+        instance_name=str(identity["instance_name"]),
+        version=str(identity["version"]),
+        auth_required=bool(identity.get("auth_required", False)),
+        device_count=int(identity.get("device_count", 0)),
     )

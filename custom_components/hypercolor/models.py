@@ -7,22 +7,29 @@ from types import MappingProxyType
 from typing import Any, Protocol, Self
 
 from hypercolor.models import (
-    ActiveEffect,
-    ActiveScene,
-    AudioDevices,
-    Device,
-    EffectPreset,
+    AudioDevicesResponse,
+    ControlDefinition,
+    DeviceSummary,
+    EffectDetailResponse,
     EffectPresetOrigin,
+    EffectPresetSummary,
     EffectSummary,
-    JsonObject,
-    Layout,
     LayoutSummary,
-    ProfileSummary,
-    Scene,
-    SystemState,
-    Zone,
+    OutputPowerMode,
+    OutputResource,
+    SceneDocument,
+    SceneSummary,
+    SpatialLayout,
+    SystemStatus,
+    ZoneResource,
 )
 from hypercolor.websocket import SpectrumData
+
+type JsonObject = dict[str, Any]
+
+ZONE_ROLE_PRIMARY = "primary"
+ZONE_ROLE_DISPLAY = "display"
+DEVICE_STATUS_DISABLED = "disabled"
 
 
 class NamedCatalogItem(Protocol):
@@ -86,12 +93,65 @@ class CatalogIndex[CatalogItemT: NamedCatalogItem]:
 
 
 @dataclass(frozen=True, slots=True)
+class EffectLayer:
+    """The addressable effect layer inside one live zone.
+
+    Layer ids come straight off the scene document. The daemon mints
+    them, so nothing here ever derives a layer id from a zone id.
+    """
+
+    zone_id: str
+    layer_id: str
+    effect_id: str
+    control_values: Mapping[str, Any]
+    preset_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveEffect:
+    layer: EffectLayer
+    detail: EffectDetailResponse
+    cover_image_url: str | None
+
+    @property
+    def id(self) -> str:
+        return self.layer.effect_id
+
+    @property
+    def name(self) -> str:
+        return self.detail.name
+
+    @property
+    def zone_id(self) -> str:
+        return self.layer.zone_id
+
+    @property
+    def layer_id(self) -> str:
+        return self.layer.layer_id
+
+    @property
+    def preset_id(self) -> str | None:
+        return self.layer.preset_id
+
+    @property
+    def control_values(self) -> Mapping[str, Any]:
+        return self.layer.control_values
+
+    @property
+    def controls(self) -> tuple[ControlDefinition, ...]:
+        controls = self.detail.controls
+        if not isinstance(controls, list):
+            return ()
+        return tuple(control for control in controls if isinstance(control, ControlDefinition))
+
+
+@dataclass(frozen=True, slots=True)
 class HypercolorState:
-    status: SystemState
+    status: SystemStatus
+    output: OutputResource
+    scene: SceneDocument
+    active_layout: SpatialLayout | None
     active_effect: ActiveEffect | None
-    active_scene: ActiveScene | None
-    active_layout: Layout | None
-    active_effect_cover_image_url: str | None
 
     @property
     def active_effect_id(self) -> str | None:
@@ -101,62 +161,58 @@ class HypercolorState:
     def active_effect_name(self) -> str | None:
         if self.active_effect is not None:
             return self.active_effect.name
-        return self.status.active_effect
+        name = self.status.active_effect
+        return name if isinstance(name, str) else None
 
     @property
     def active_preset_id(self) -> str | None:
-        if self.active_effect is None:
-            return None
-        return self.active_effect.active_preset_id
+        return self.active_effect.preset_id if self.active_effect is not None else None
 
     @property
-    def active_preset_modified(self) -> bool:
-        return (
-            self.active_effect.active_preset_modified if self.active_effect is not None else False
-        )
+    def active_effect_cover_image_url(self) -> str | None:
+        return self.active_effect.cover_image_url if self.active_effect is not None else None
 
     @property
     def paused(self) -> bool:
-        return self.status.paused
+        return self.output.power is OutputPowerMode.PAUSED
 
     @property
-    def zones(self) -> tuple[Zone, ...]:
-        if self.active_scene is None:
-            return ()
-        return tuple(self.active_scene.groups)
+    def brightness(self) -> float:
+        return self.output.brightness
 
     @property
-    def renderable_zones(self) -> tuple[Zone, ...]:
-        return tuple(zone for zone in self.zones if not zone.is_display)
+    def zones(self) -> tuple[ZoneResource, ...]:
+        return tuple(self.scene.zones)
 
-    def zone(self, zone_id: str) -> Zone | None:
+    @property
+    def renderable_zones(self) -> tuple[ZoneResource, ...]:
+        return tuple(zone for zone in self.zones if zone_role(zone) != ZONE_ROLE_DISPLAY)
+
+    def zone(self, zone_id: str) -> ZoneResource | None:
         return next((zone for zone in self.renderable_zones if zone.id == zone_id), None)
 
 
 @dataclass(frozen=True, slots=True)
 class HypercolorCatalog:
     effects: CatalogIndex[EffectSummary]
-    scenes: CatalogIndex[Scene]
-    profiles: CatalogIndex[ProfileSummary]
+    scenes: CatalogIndex[SceneSummary]
     layouts: CatalogIndex[LayoutSummary]
     preset_effect_id: str | None
-    presets: CatalogIndex[EffectPreset]
+    presets: CatalogIndex[EffectPresetSummary]
 
     @classmethod
     def build(
         cls,
         *,
         effects: Iterable[EffectSummary],
-        scenes: Iterable[Scene],
-        profiles: Iterable[ProfileSummary],
+        scenes: Iterable[SceneSummary],
         layouts: Iterable[LayoutSummary],
         preset_effect_id: str | None,
-        presets: Iterable[EffectPreset],
+        presets: Iterable[EffectPresetSummary],
     ) -> Self:
         return cls(
             effects=CatalogIndex.build(effects),
             scenes=CatalogIndex.build(scenes),
-            profiles=CatalogIndex.build(profiles),
             layouts=CatalogIndex.build(layouts),
             preset_effect_id=preset_effect_id,
             presets=CatalogIndex.build(
@@ -168,7 +224,7 @@ class HypercolorCatalog:
 
 @dataclass(frozen=True, slots=True)
 class HypercolorAudio:
-    devices: AudioDevices | None = None
+    devices: AudioDevicesResponse | None = None
     spectrum: SpectrumData | None = None
     beat_until: float | None = None
 
@@ -177,7 +233,7 @@ class HypercolorAudio:
 class HypercolorSnapshot:
     state: HypercolorState
     catalog: HypercolorCatalog
-    devices: tuple[Device, ...]
+    devices: tuple[DeviceSummary, ...]
     metrics: JsonObject = field(default_factory=dict)
     audio: HypercolorAudio = field(default_factory=HypercolorAudio)
 
@@ -189,15 +245,15 @@ class HypercolorSnapshot:
     @property
     def active_effect_audio_reactive(self) -> bool:
         effect = self.active_effect_summary
-        return effect.audio_reactive if effect is not None else False
+        return effect.audio_reactive is True if effect is not None else False
 
     @property
-    def active_effect_presets(self) -> CatalogIndex[EffectPreset]:
+    def active_effect_presets(self) -> CatalogIndex[EffectPresetSummary]:
         if self.catalog.preset_effect_id != self.state.active_effect_id:
             return CatalogIndex.build(())
         return self.catalog.presets
 
-    def device(self, device_id: str) -> Device | None:
+    def device(self, device_id: str) -> DeviceSummary | None:
         return next((device for device in self.devices if device.id == device_id), None)
 
     def with_metrics(self, metrics: JsonObject) -> Self:
@@ -218,14 +274,56 @@ class HypercolorSnapshot:
         )
 
 
+def zone_role(zone: ZoneResource) -> str:
+    return zone.role if isinstance(zone.role, str) else "custom"
+
+
+def effect_layer(zone: ZoneResource) -> EffectLayer | None:
+    """Return the topmost effect layer of a zone, if it has one."""
+    for layer in reversed(zone.layers):
+        source = layer.source.additional_properties
+        if source.get("type") != "effect":
+            continue
+        effect_id = source.get("effect_id")
+        if not isinstance(effect_id, str):
+            continue
+        controls = source.get("controls")
+        preset_id = source.get("preset_id")
+        return EffectLayer(
+            zone_id=zone.id,
+            layer_id=str(layer.id),
+            effect_id=effect_id,
+            control_values=MappingProxyType(dict(controls) if isinstance(controls, dict) else {}),
+            preset_id=preset_id if isinstance(preset_id, str) else None,
+        )
+    return None
+
+
+def primary_effect_layer(scene: SceneDocument) -> EffectLayer | None:
+    """Return the effect layer the master light represents.
+
+    The primary zone wins; without one, the first renderable zone that
+    carries an effect stands in.
+    """
+    renderable = [zone for zone in scene.zones if zone_role(zone) != ZONE_ROLE_DISPLAY]
+    ordered = sorted(renderable, key=lambda zone: zone_role(zone) != ZONE_ROLE_PRIMARY)
+    return next((layer for zone in ordered if (layer := effect_layer(zone)) is not None), None)
+
+
+def device_enabled(device: DeviceSummary) -> bool:
+    return device.status != DEVICE_STATUS_DISABLED
+
+
 def control_scalar(value: Any) -> Any:
-    if isinstance(value, dict) and len(value) == 1:
-        inner = next(iter(value.values()))
-        if isinstance(inner, (int, float, str, bool)):
-            return inner
+    """Unwrap a canonical control envelope down to its plain value."""
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        value = to_dict()
+    if isinstance(value, dict) and "kind" in value:
+        return value.get("value")
     return value
 
 
-def _preset_collision_label(preset: EffectPreset) -> str:
+def _preset_collision_label(preset: EffectPresetSummary) -> str:
     origin = "Built-in" if preset.origin is EffectPresetOrigin.BUNDLED else "Saved"
     return f"{preset.name} ({origin})"

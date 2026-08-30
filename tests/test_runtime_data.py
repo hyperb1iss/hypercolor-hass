@@ -11,7 +11,6 @@ from custom_components.hypercolor.runtime_data import (
     ConnectionState,
     HypercolorRuntimeData,
 )
-from hypercolor import HypercolorNotFoundError
 
 
 def test_connection_state_tracks_each_source_and_notifies_listeners() -> None:
@@ -120,30 +119,16 @@ async def test_mutation_gateway_preserves_operation_error_when_refresh_fails() -
     assert coordinator.refreshes == 1
 
 
-@pytest.mark.parametrize(
-    ("error", "raises"),
-    [
-        (None, False),
-        (HypercolorNotFoundError("No effect is currently active"), False),
-        (HypercolorNotFoundError("Stop endpoint is unavailable"), True),
-    ],
-)
-async def test_stop_effect_normalizes_only_the_idle_response(
-    error: Exception | None,
-    raises: bool,
-) -> None:
+async def test_stop_effect_clears_the_live_scene() -> None:
     coordinator = _Coordinator()
-    client = _StopClient(error)
+    client = _ClearClient()
     runtime = _runtime(coordinator, client=client)
 
-    if raises:
-        with pytest.raises(HypercolorNotFoundError, match="Stop endpoint is unavailable"):
-            await runtime.async_stop_effect()
-    else:
-        await runtime.async_stop_effect()
+    await runtime.async_stop_effect()
+    await runtime.async_stop_effect()
 
-    assert client.stop_calls == 1
-    assert coordinator.refreshes == 1
+    assert client.clear_calls == 2
+    assert coordinator.refreshes == 2
 
 
 class _Coordinator:
@@ -159,15 +144,12 @@ class _Coordinator:
             raise self.refresh_error
 
 
-class _StopClient:
-    def __init__(self, error: Exception | None) -> None:
-        self.error = error
-        self.stop_calls = 0
+class _ClearClient:
+    def __init__(self) -> None:
+        self.clear_calls = 0
 
-    async def stop_effect(self) -> None:
-        self.stop_calls += 1
-        if self.error is not None:
-            raise self.error
+    async def clear_scene(self) -> None:
+        self.clear_calls += 1
 
 
 def _runtime(coordinator: _Coordinator, *, client: object | None = None) -> HypercolorRuntimeData:
@@ -176,7 +158,7 @@ def _runtime(coordinator: _Coordinator, *, client: object | None = None) -> Hype
         server=ServerInfo(
             instance_id="srv-1",
             instance_name="Hyperia",
-            version="0.3.2",
+            version="0.4.0",
             auth_required=True,
             device_count=3,
         ),

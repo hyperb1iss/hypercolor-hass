@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from hypercolor import HypercolorClient, HypercolorNotFoundError
+from hypercolor import HypercolorClient
 
 from .api import ServerInfo
 from .models import HypercolorSnapshot
@@ -17,8 +17,6 @@ if TYPE_CHECKING:
     from .coordinator import HypercolorCoordinator
 
 ResultT = TypeVar("ResultT")
-
-_NO_ACTIVE_EFFECT = "No effect is currently active"
 
 
 class ConnectionSource(StrEnum):
@@ -192,14 +190,8 @@ class HypercolorRuntimeData:
         return result
 
     async def async_stop_effect(self) -> None:
-        async def stop() -> None:
-            try:
-                await self.client.stop_effect()
-            except HypercolorNotFoundError as exc:
-                if str(exc) != _NO_ACTIVE_EFFECT:
-                    raise
-
-        await self.async_mutate(stop)
+        """Empty every renderable zone; the daemon treats an empty scene as a no-op."""
+        await self.async_mutate(self.client.clear_scene)
 
 
 def _latest(values: Iterable[datetime | None]) -> datetime | None:

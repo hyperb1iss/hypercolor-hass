@@ -8,15 +8,15 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from hypercolor.models import EffectPreset, LayoutSummary, ProfileSummary, Scene
+from hypercolor.models import AudioDeviceInfo, EffectPresetSummary, LayoutSummary, SceneSummary
 
 from .const import CONF_CHANNELS_AUDIO
 from .entity import HypercolorEntity, hub_device_info
 from .models import CatalogIndex
 from .runtime_data import HypercolorRuntimeData
 
-type CatalogKind = Literal["scenes", "profiles", "layouts"]
-type SelectIndex = CatalogIndex[Scene] | CatalogIndex[ProfileSummary] | CatalogIndex[LayoutSummary]
+type CatalogKind = Literal["scenes", "layouts"]
+type SelectIndex = CatalogIndex[SceneSummary] | CatalogIndex[LayoutSummary]
 
 
 async def async_setup_entry(
@@ -31,13 +31,6 @@ async def async_setup_entry(
             translation_key="scene",
             unique_suffix="scene",
             action=entry.runtime_data.client.activate_scene,
-        ),
-        HypercolorCatalogSelect(
-            entry,
-            kind="profiles",
-            translation_key="profile",
-            unique_suffix="profile",
-            action=entry.runtime_data.client.apply_profile,
         ),
         HypercolorCatalogSelect(
             entry,
@@ -81,11 +74,9 @@ class HypercolorCatalogSelect(HypercolorEntity, SelectEntity):
     def current_option(self) -> str | None:
         state = self.snapshot.state
         if self._kind == "scenes":
-            active_id = state.active_scene.id if state.active_scene is not None else None
-        elif self._kind == "layouts":
-            active_id = state.active_layout.id if state.active_layout is not None else None
+            active_id = state.scene.id
         else:
-            return None
+            active_id = state.active_layout.id if state.active_layout is not None else None
         return self._index.label(active_id)
 
     async def async_select_option(self, option: str) -> None:
@@ -97,11 +88,7 @@ class HypercolorCatalogSelect(HypercolorEntity, SelectEntity):
         catalog = self.snapshot.catalog
         if self._kind == "scenes":
             return catalog.scenes
-        if self._kind == "profiles":
-            return catalog.profiles
-        if self._kind == "layouts":
-            return catalog.layouts
-        raise AssertionError(self._kind)
+        return catalog.layouts
 
 
 class HypercolorPresetSelect(HypercolorEntity, SelectEntity):
@@ -122,10 +109,6 @@ class HypercolorPresetSelect(HypercolorEntity, SelectEntity):
     def current_option(self) -> str | None:
         return self._index.label(self.snapshot.state.active_preset_id)
 
-    @property
-    def extra_state_attributes(self) -> dict[str, bool]:
-        return {"active_preset_modified": self.snapshot.state.active_preset_modified}
-
     async def async_select_option(self, option: str) -> None:
         preset = self._index.by_id[self._index.resolve(option)]
         await self._runtime.async_mutate(
@@ -133,7 +116,7 @@ class HypercolorPresetSelect(HypercolorEntity, SelectEntity):
         )
 
     @property
-    def _index(self) -> CatalogIndex[EffectPreset]:
+    def _index(self) -> CatalogIndex[EffectPresetSummary]:
         return self.snapshot.active_effect_presets
 
 
@@ -161,6 +144,6 @@ class HypercolorAudioDeviceSelect(HypercolorEntity, SelectEntity):
         await self._runtime.async_mutate(lambda: self._runtime.client.set_audio_device(device_id))
 
     @property
-    def _index(self):
+    def _index(self) -> CatalogIndex[AudioDeviceInfo]:
         devices = self.snapshot.audio.devices
         return CatalogIndex.build(devices.devices if devices is not None else ())

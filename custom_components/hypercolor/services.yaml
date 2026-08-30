@@ -98,9 +98,6 @@ set_zone:
       required: true
       selector:
         text:
-    scene_id:
-      selector:
-        text:
     name:
       selector:
         text:
@@ -113,9 +110,6 @@ set_zone:
     enabled:
       selector:
         boolean:
-    make_primary:
-      selector:
-        boolean:
 
 list_zones:
   fields:
@@ -124,9 +118,6 @@ list_zones:
       selector:
         config_entry:
           integration: hypercolor
-    scene_id:
-      selector:
-        text:
 
 set_unassigned_behavior:
   fields:
@@ -144,9 +135,6 @@ set_unassigned_behavior:
             - hold
             - fallback
     fallback_zone_id:
-      selector:
-        text:
-    scene_id:
       selector:
         text:
 
@@ -171,19 +159,7 @@ create_scene:
       selector:
         text:
 
-activate_profile:
-  fields:
-    config_entry_id:
-      required: true
-      selector:
-        config_entry:
-          integration: hypercolor
-    profile_id:
-      required: true
-      selector:
-        text:
-
-save_profile:
+snapshot_scene:
   fields:
     config_entry_id:
       required: true
@@ -197,15 +173,6 @@ save_profile:
     description:
       selector:
         text:
-    brightness:
-      selector:
-        number:
-          min: 0
-          max: 100
-          mode: slider
-    force:
-      selector:
-        boolean:
 
 apply_layout:
   fields:
