@@ -15,6 +15,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from hypercolor.models import (
     ControlDefinition,
+    ControlType,
     DeviceSummary,
     EffectSummary,
     ZoneResource,
@@ -39,11 +40,11 @@ from .models import (
 from .runtime_data import HypercolorRuntimeData
 
 _CONTROL_KINDS = {
-    "toggle": "boolean",
-    "color_picker": "color",
-    "gradient_editor": "color",
-    "dropdown": "enum",
-    "slider": "number",
+    ControlType.TOGGLE: "boolean",
+    ControlType.COLOR_PICKER: "color",
+    ControlType.GRADIENT_EDITOR: "color",
+    ControlType.DROPDOWN: "enum",
+    ControlType.SLIDER: "number",
 }
 
 
@@ -342,7 +343,7 @@ def _control_payload(control: ControlDefinition, live_value: Any) -> dict[str, A
 
 
 def _canonical_control_kind(control: ControlDefinition) -> str:
-    kind = _CONTROL_KINDS.get(str(control.control_type))
+    kind = _CONTROL_KINDS.get(control.control_type)
     if kind is not None:
         return kind
     return "enum" if isinstance(control.labels, list) and control.labels else "other"

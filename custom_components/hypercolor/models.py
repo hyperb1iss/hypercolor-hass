@@ -9,6 +9,7 @@ from typing import Any, Protocol, Self
 from hypercolor.models import (
     AudioDevicesResponse,
     ControlDefinition,
+    ControlValue,
     DeviceSummary,
     EffectDetailResponse,
     EffectPresetOrigin,
@@ -21,6 +22,7 @@ from hypercolor.models import (
     SceneSummary,
     SpatialLayout,
     SystemStatus,
+    Unset,
     ZoneResource,
 )
 from hypercolor.websocket import SpectrumData
@@ -140,9 +142,7 @@ class ActiveEffect:
     @property
     def controls(self) -> tuple[ControlDefinition, ...]:
         controls = self.detail.controls
-        if not isinstance(controls, list):
-            return ()
-        return tuple(control for control in controls if isinstance(control, ControlDefinition))
+        return () if isinstance(controls, Unset) else tuple(controls)
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,9 +323,8 @@ def device_enabled(device: DeviceSummary) -> bool:
 
 def control_scalar(value: Any) -> Any:
     """Unwrap a canonical control envelope down to its plain value."""
-    to_dict = getattr(value, "to_dict", None)
-    if callable(to_dict):
-        value = to_dict()
+    if isinstance(value, ControlValue):
+        value = value.to_dict()
     if isinstance(value, dict) and "kind" in value:
         return value.get("value")
     return value
