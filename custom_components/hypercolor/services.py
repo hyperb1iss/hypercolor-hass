@@ -16,6 +16,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv, selector, service as service_helper
 
 from .const import DOMAIN
+from .models import ActiveEffect
 from .runtime_data import HypercolorRuntimeData
 
 CONF_CONFIG_ENTRY_ID = "config_entry_id"
@@ -26,11 +27,10 @@ SERVICE_SET_CONTROL = "set_control"
 SERVICE_ACTIVATE_SCENE = "activate_scene"
 SERVICE_DEACTIVATE_SCENE = "deactivate_scene"
 SERVICE_CREATE_SCENE = "create_scene"
+SERVICE_SNAPSHOT_SCENE = "snapshot_scene"
 SERVICE_SET_ZONE = "set_zone"
 SERVICE_LIST_ZONES = "list_zones"
 SERVICE_SET_UNASSIGNED_BEHAVIOR = "set_unassigned_behavior"
-SERVICE_ACTIVATE_PROFILE = "activate_profile"
-SERVICE_SAVE_PROFILE = "save_profile"
 SERVICE_APPLY_LAYOUT = "apply_layout"
 SERVICE_APPLY_PRESET = "apply_preset"
 SERVICE_SAVE_PRESET = "save_preset"
@@ -97,11 +97,9 @@ def async_setup_services(hass: HomeAssistant) -> None:
         _schema(
             {
                 vol.Required("zone_id"): cv.string,
-                vol.Optional("scene_id"): cv.string,
                 vol.Optional(CONF_NAME): cv.string,
                 vol.Optional("brightness"): vol.All(int, vol.Range(min=0, max=100)),
                 vol.Optional("enabled"): bool,
-                vol.Optional("make_primary"): bool,
             }
         ),
     )
@@ -109,7 +107,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         hass,
         SERVICE_LIST_ZONES,
         _list_zones,
-        _schema({vol.Optional("scene_id"): cv.string}),
+        _schema({}),
         supports_response=SupportsResponse.ONLY,
     )
     _register(
@@ -120,7 +118,6 @@ def async_setup_services(hass: HomeAssistant) -> None:
             {
                 vol.Required("behavior"): vol.In(["off", "hold", "fallback"]),
                 vol.Optional("fallback_zone_id"): cv.string,
-                vol.Optional("scene_id"): cv.string,
             }
         ),
     )
@@ -140,20 +137,12 @@ def async_setup_services(hass: HomeAssistant) -> None:
     )
     _register(
         hass,
-        SERVICE_ACTIVATE_PROFILE,
-        _activate_profile,
-        _schema({vol.Required("profile_id"): cv.string}),
-    )
-    _register(
-        hass,
-        SERVICE_SAVE_PROFILE,
-        _save_profile,
+        SERVICE_SNAPSHOT_SCENE,
+        _snapshot_scene,
         _schema(
             {
                 vol.Required(CONF_NAME): cv.string,
                 vol.Optional("description"): cv.string,
-                vol.Optional("brightness"): vol.All(int, vol.Range(min=0, max=100)),
-                vol.Optional("force"): bool,
             }
         ),
         supports_response=SupportsResponse.OPTIONAL,
@@ -281,14 +270,13 @@ def _schema(fields: dict[Any, Any]) -> vol.Schema:
 async def _apply_effect(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
     runtime = entry.runtime_data
-    zone_id = call.data.get("zone_id")
     await runtime.async_mutate(
         lambda: runtime.client.apply_effect(
             call.data["effect_id"],
             controls=call.data.get("controls"),
             transition=call.data.get("transition"),
             preset_id=call.data.get("preset_id"),
-            render_group=zone_id,
+            zone=call.data.get("zone_id"),
         )
     )
 
@@ -308,8 +296,13 @@ async def _set_color(call: ServiceCall) -> None:
 async def _set_control(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
     runtime = entry.runtime_data
+    active = _active_effect(entry)
     await runtime.async_mutate(
-        lambda: runtime.client.update_controls({call.data["control_name"]: call.data["value"]})
+        lambda: runtime.client.patch_layer_controls(
+            active.zone_id,
+            active.layer_id,
+            {call.data["control_name"]: call.data["value"]},
+        )
     )
 
 
@@ -327,63 +320,42 @@ async def _deactivate_scene(call: ServiceCall) -> None:
 async def _set_zone(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
     runtime = entry.runtime_data
-    scene_id = await _resolve_scene_id(entry, call.data.get("scene_id"))
     name = call.data.get(CONF_NAME)
     brightness_value = call.data.get("brightness")
     brightness = round(int(brightness_value) / 100, 4) if brightness_value is not None else None
     enabled = call.data.get("enabled")
-    make_primary = bool(call.data.get("make_primary")) or None
-    if name is None and brightness is None and enabled is None and make_primary is None:
+    if name is None and brightness is None and enabled is None:
         raise HomeAssistantError("set_zone needs at least one field to change")
     await runtime.async_mutate(
         lambda: runtime.client.update_zone(
-            scene_id,
             call.data["zone_id"],
             name=name,
             brightness=brightness,
             enabled=enabled,
-            make_primary=make_primary,
         )
     )
 
 
 async def _list_zones(call: ServiceCall) -> dict[str, Any]:
     entry = _entry(call.hass, call)
-    client = entry.runtime_data.client
-    scene_id = await _resolve_scene_id(entry, call.data.get("scene_id"))
-    result = await client.get_zones(scene_id)
+    scene = await entry.runtime_data.client.get_live_scene()
     return {
-        "scene_id": scene_id,
-        "groups_revision": result.groups_revision,
-        "zones": [_jsonable(zone) for zone in result.items],
+        "scene_id": scene.id,
+        "revision": scene.revision,
+        "zones": [_jsonable(zone) for zone in scene.zones],
     }
 
 
 async def _set_unassigned_behavior(call: ServiceCall) -> None:
     entry = _entry(call.hass, call)
     client = entry.runtime_data.client
-    scene_id = await _resolve_scene_id(entry, call.data.get("scene_id"))
     behavior: str | dict[str, Any] = call.data["behavior"]
     if behavior == "fallback":
         fallback_zone_id = call.data.get("fallback_zone_id")
         if not fallback_zone_id:
             raise HomeAssistantError("fallback behavior requires fallback_zone_id")
         behavior = {"fallback": fallback_zone_id}
-    await entry.runtime_data.async_mutate(
-        lambda: client.set_unassigned_behavior(scene_id, behavior)
-    )
-
-
-async def _resolve_scene_id(
-    entry: ConfigEntry[HypercolorRuntimeData],
-    scene_id: str | None,
-) -> str:
-    if scene_id:
-        return scene_id
-    active = entry.runtime_data.snapshot.state.active_scene
-    if active is None:
-        raise HomeAssistantError("No active Hypercolor scene")
-    return active.id
+    await entry.runtime_data.async_mutate(lambda: client.set_unassigned_behavior(behavior))
 
 
 async def _create_scene(call: ServiceCall) -> dict[str, Any]:
@@ -400,24 +372,16 @@ async def _create_scene(call: ServiceCall) -> dict[str, Any]:
     return {"scene": _jsonable(scene)}
 
 
-async def _activate_profile(call: ServiceCall) -> None:
+async def _snapshot_scene(call: ServiceCall) -> dict[str, Any]:
     entry = _entry(call.hass, call)
     runtime = entry.runtime_data
-    await runtime.async_mutate(lambda: runtime.client.apply_profile(call.data["profile_id"]))
-
-
-async def _save_profile(call: ServiceCall) -> dict[str, Any]:
-    entry = _entry(call.hass, call)
-    runtime = entry.runtime_data
-    profile = await runtime.async_mutate(
-        lambda: runtime.client.save_profile(
+    scene = await runtime.async_mutate(
+        lambda: runtime.client.snapshot_scene(
             call.data[CONF_NAME],
             description=call.data.get("description"),
-            brightness=call.data.get("brightness"),
-            force=bool(call.data.get("force", False)),
         )
     )
-    return {"profile": _jsonable(profile)}
+    return {"scene": _jsonable(scene)}
 
 
 async def _apply_layout(call: ServiceCall) -> None:
@@ -565,7 +529,7 @@ async def _run_diagnostics(call: ServiceCall) -> dict[str, Any]:
     runtime = entry.runtime_data
     daemon = await runtime.client.run_diagnostics(checks=call.data.get("checks"))
     return {
-        "daemon": daemon,
+        "daemon": _jsonable(daemon),
         "config_entry": {
             CONF_NAME: entry.title,
             "entry_id": entry.entry_id,
@@ -588,9 +552,17 @@ def _color_value(data: dict[str, Any]) -> str:
     return f"#{int(red):02x}{int(green):02x}{int(blue):02x}"
 
 
+def _active_effect(entry: ConfigEntry[HypercolorRuntimeData]) -> ActiveEffect:
+    active = entry.runtime_data.snapshot.state.active_effect
+    if active is None:
+        raise HomeAssistantError("No effect is currently active")
+    return active
+
+
 def _jsonable(value: Any) -> Any:
-    if hasattr(value, "__struct_fields__"):
-        return {field: _jsonable(getattr(value, field)) for field in value.__struct_fields__}
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return _jsonable(to_dict())
     if isinstance(value, dict):
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, list):

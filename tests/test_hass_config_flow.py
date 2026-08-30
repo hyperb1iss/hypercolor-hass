@@ -64,6 +64,10 @@ async def test_user_flow_creates_entry(
 ) -> None:
     validate = AsyncMock(return_value=_server())
     monkeypatch.setattr(config_flow, "_validate", validate)
+    monkeypatch.setattr(
+        "custom_components.hypercolor.async_setup_entry",
+        AsyncMock(return_value=True),
+    )
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN,

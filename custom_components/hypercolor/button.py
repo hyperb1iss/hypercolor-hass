@@ -8,7 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from hypercolor.models import Device
+from hypercolor.models import DeviceSummary
 
 from .entity import (
     HypercolorDeviceEntity,
@@ -104,7 +104,7 @@ class HypercolorIdentifyDeviceButton(HypercolorDeviceEntity, ButtonEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "identify"
 
-    def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], device: Device) -> None:
+    def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], device: DeviceSummary) -> None:
         super().__init__(entry, device)
         runtime = entry.runtime_data
         self._attr_unique_id = f"{runtime.server.instance_id}:device:{self._device_id}:identify"

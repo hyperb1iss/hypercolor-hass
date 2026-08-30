@@ -18,13 +18,19 @@ from custom_components.hypercolor.services import (
     SERVICE_APPLY_EFFECT,
     SERVICE_APPLY_PRESET,
     SERVICE_LIST_PRESETS,
+    SERVICE_LIST_ZONES,
     SERVICE_SAVE_PRESET,
     SERVICE_SET_COLOR,
+    SERVICE_SET_CONTROL,
     SERVICE_SET_ZONE,
+    SERVICE_SNAPSHOT_SCENE,
     _upload_effect,
     async_setup_services,
 )
-from hypercolor.models import EffectPreset, EffectPresetOrigin, Preset
+from hypercolor.models import EffectPreset, EffectPresetSummary, SceneDocument, SceneSummary
+from tests.support import hypercolor_payloads as payloads
+from tests.support.hypercolor_payloads import PRIMARY_ZONE_ID
+from tests.support.wire import minimal
 
 
 async def test_registered_services_reject_non_admin_users(
@@ -43,7 +49,7 @@ async def test_registered_services_reject_non_admin_users(
         )
 
 
-async def test_registered_apply_effect_routes_and_refreshes(hass: HomeAssistant) -> None:
+async def test_registered_apply_effect_targets_a_zone(hass: HomeAssistant) -> None:
     runtime = _Runtime()
     entry = _entry(hass, runtime)
 
@@ -66,7 +72,7 @@ async def test_registered_apply_effect_routes_and_refreshes(hass: HomeAssistant)
                 "controls": None,
                 "transition": None,
                 "preset_id": None,
-                "render_group": "zone-1",
+                "zone": "zone-1",
             },
         )
     ]
@@ -96,7 +102,7 @@ async def test_registered_apply_effect_routes_to_preset(hass: HomeAssistant) -> 
                 "controls": None,
                 "transition": None,
                 "preset_id": "soft",
-                "render_group": None,
+                "zone": None,
             },
         )
     ]
@@ -124,7 +130,40 @@ async def test_registered_apply_preset_uses_effect_scoped_route(
     assert runtime.refreshes == 1
 
 
-async def test_registered_set_zone_uses_snapshot_scene(hass: HomeAssistant) -> None:
+async def test_registered_set_control_patches_the_active_layer(hass: HomeAssistant) -> None:
+    runtime = _Runtime()
+    entry = _entry(hass, runtime)
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_CONTROL,
+        {CONF_CONFIG_ENTRY_ID: entry.entry_id, "control_name": "speed", "value": 40},
+        blocking=True,
+    )
+
+    assert runtime.client.calls == [
+        ("patch_layer_controls", ("zone-active", "layer-active", {"speed": 40}), {})
+    ]
+    assert runtime.refreshes == 1
+
+
+async def test_registered_set_control_requires_an_active_effect(hass: HomeAssistant) -> None:
+    runtime = _Runtime()
+    runtime.snapshot.state.active_effect = None
+    entry = _entry(hass, runtime)
+
+    with pytest.raises(HomeAssistantError, match="No effect is currently active"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_CONTROL,
+            {CONF_CONFIG_ENTRY_ID: entry.entry_id, "control_name": "speed", "value": 40},
+            blocking=True,
+        )
+
+    assert runtime.client.calls == []
+
+
+async def test_registered_set_zone_patches_the_live_zone(hass: HomeAssistant) -> None:
     runtime = _Runtime()
     entry = _entry(hass, runtime)
 
@@ -141,13 +180,30 @@ async def test_registered_set_zone_uses_snapshot_scene(hass: HomeAssistant) -> N
     )
 
     assert runtime.client.calls == [
-        (
-            "update_zone",
-            ("scene-active", "zone-1"),
-            {"name": None, "brightness": 0.5, "enabled": True, "make_primary": None},
-        )
+        ("update_zone", ("zone-1",), {"name": None, "brightness": 0.5, "enabled": True})
     ]
     assert runtime.refreshes == 1
+
+
+async def test_registered_list_zones_reads_the_live_scene(hass: HomeAssistant) -> None:
+    runtime = _Runtime()
+    entry = _entry(hass, runtime)
+
+    response = await hass.services.async_call(
+        DOMAIN,
+        SERVICE_LIST_ZONES,
+        {CONF_CONFIG_ENTRY_ID: entry.entry_id},
+        blocking=True,
+        return_response=True,
+    )
+
+    response_data = cast(dict[str, Any], response)
+    assert response_data["scene_id"] == "default"
+    assert response_data["revision"] == 2
+    zones = cast(list[dict[str, Any]], response_data["zones"])
+    assert [zone["id"] for zone in zones] == [PRIMARY_ZONE_ID]
+    assert zones[0]["layers"][0]["source"]["effect_id"] == "rainbow"
+    assert runtime.refreshes == 0
 
 
 async def test_registered_set_color_builds_hex_control(hass: HomeAssistant) -> None:
@@ -164,6 +220,25 @@ async def test_registered_set_color_builds_hex_control(hass: HomeAssistant) -> N
     assert runtime.client.calls == [
         ("apply_effect", ("solid_color",), {"controls": {"color": "#80ff00"}})
     ]
+
+
+async def test_registered_snapshot_scene_returns_the_saved_scene(hass: HomeAssistant) -> None:
+    runtime = _Runtime()
+    entry = _entry(hass, runtime)
+
+    response = await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SNAPSHOT_SCENE,
+        {CONF_CONFIG_ENTRY_ID: entry.entry_id, CONF_NAME: "Evening"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert runtime.client.calls == [("snapshot_scene", ("Evening",), {"description": None})]
+    response_data = cast(dict[str, Any], response)
+    assert response_data["scene"]["id"] == "scene-evening"
+    assert response_data["scene"]["name"] == "Evening"
+    assert runtime.refreshes == 1
 
 
 async def test_registered_save_preset_uses_active_effect(hass: HomeAssistant) -> None:
@@ -189,18 +264,9 @@ async def test_registered_save_preset_uses_active_effect(hass: HomeAssistant) ->
             {"description": None, "controls": {"speed": 40}, "tags": None},
         )
     ]
-    assert response == {
-        "preset": {
-            "id": "preset-1",
-            "name": "Soft",
-            "description": None,
-            "effect_id": "aurora",
-            "controls": {},
-            "tags": [],
-            "created_at_ms": None,
-            "updated_at_ms": None,
-        }
-    }
+    response_data = cast(dict[str, Any], response)
+    assert response_data["preset"]["name"] == "Soft"
+    assert response_data["preset"]["id"] == _PRESET_UUID
 
 
 async def test_registered_list_presets_filters_without_mutating(hass: HomeAssistant) -> None:
@@ -276,6 +342,15 @@ def test_apply_effect_schema_rejects_fake_entity_target(hass: HomeAssistant) -> 
         )
 
 
+def test_retired_profile_services_are_gone(hass: HomeAssistant) -> None:
+    _entry(hass, _Runtime())
+    registered = hass.services.async_services()[DOMAIN]
+
+    assert "activate_profile" not in registered
+    assert "save_profile" not in registered
+    assert SERVICE_SNAPSHOT_SCENE in registered
+
+
 async def test_upload_effect_rejects_path_outside_allowed_roots(
     hass: HomeAssistant,
     tmp_path,
@@ -331,6 +406,9 @@ async def test_upload_effect_rejects_path_replacement_during_open(
         await _upload_effect(_call(hass, entry, {"path": str(path)}))
 
 
+_PRESET_UUID = "1b4e28ba-2fa1-11d2-883f-0016d3cca427"
+
+
 class _Runtime:
     def __init__(self) -> None:
         self.client = _FakeClient()
@@ -338,7 +416,7 @@ class _Runtime:
         self.snapshot = SimpleNamespace(
             state=SimpleNamespace(
                 active_effect_id="aurora",
-                active_scene=SimpleNamespace(id="scene-active"),
+                active_effect=SimpleNamespace(zone_id="zone-active", layer_id="layer-active"),
             )
         )
 
@@ -362,22 +440,41 @@ class _FakeClient:
     async def apply_effect_preset(self, *args: Any, **kwargs: Any) -> None:
         self.calls.append(("apply_effect_preset", args, kwargs))
 
+    async def patch_layer_controls(self, *args: Any, **kwargs: Any) -> None:
+        self.calls.append(("patch_layer_controls", args, kwargs))
+
     async def update_zone(self, *args: Any, **kwargs: Any) -> None:
         self.calls.append(("update_zone", args, kwargs))
 
-    async def save_preset(self, *args: Any, **kwargs: Any) -> Preset:
-        self.calls.append(("save_preset", args, kwargs))
-        return Preset(id="preset-1", name="Soft", effect_id="aurora")
+    async def get_live_scene(self) -> SceneDocument:
+        self.calls.append(("get_live_scene", (), {}))
+        return SceneDocument.from_dict(
+            payloads.scene_document([payloads.zone("rainbow", {"speed": 60.0}, None)])
+        )
 
-    async def get_effect_presets(self, effect_id: str) -> list[EffectPreset]:
+    async def snapshot_scene(self, *args: Any, **kwargs: Any) -> SceneSummary:
+        self.calls.append(("snapshot_scene", args, kwargs))
+        return SceneSummary.from_dict(minimal(SceneSummary, id="scene-evening", name=args[0]))
+
+    async def save_preset(self, *args: Any, **kwargs: Any) -> EffectPreset:
+        self.calls.append(("save_preset", args, kwargs))
+        return EffectPreset.from_dict(
+            minimal(EffectPreset, id=_PRESET_UUID, name="Soft", effect_id=_PRESET_UUID)
+        )
+
+    async def get_effect_presets(self, effect_id: str) -> list[EffectPresetSummary]:
         self.calls.append(("get_effect_presets", (effect_id,), {}))
         return [
-            EffectPreset(
-                id="preset-1",
-                name="Soft",
-                effect_id=effect_id,
-                origin=EffectPresetOrigin.BUNDLED,
-                editable=False,
+            EffectPresetSummary.from_dict(
+                minimal(
+                    EffectPresetSummary,
+                    id="preset-1",
+                    name="Soft",
+                    effect_id=effect_id,
+                    origin="bundled",
+                    editable=False,
+                    controls={},
+                )
             )
         ]
 

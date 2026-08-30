@@ -15,7 +15,7 @@ from homeassistant.helpers import (
 from homeassistant.helpers.httpx_client import get_async_client
 
 from hypercolor import HypercolorClient
-from hypercolor.models import Device
+from hypercolor.models import DeviceSummary
 
 from .api import (
     CannotConnectError,
@@ -37,12 +37,14 @@ from .coordinator import (
     reconcile_loop,
     websocket_loop,
 )
-from .entity import child_device_identifier, hub_device_info
+from .entity import child_device_info, hub_device_info
 from .models import HypercolorState
 from .runtime_data import ConnectionSource, ConnectionState, HypercolorRuntimeData
 from .services import async_setup_services
 
 type HypercolorConfigEntry = ConfigEntry[HypercolorRuntimeData]
+
+RETIRED_UNIQUE_SUFFIXES = ("profile",)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -67,7 +69,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HypercolorConfigEntry) -
         raise ConfigEntryAuthFailed from exc
     except UnsupportedDaemonError as exc:
         raise ConfigEntryError(
-            "The Hypercolor daemon does not support persistent output pause"
+            "The Hypercolor daemon does not expose the output resource"
         ) from exc
 
     client = HypercolorClient(
@@ -109,6 +111,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HypercolorConfigEntry) -
     sync_devices()
     entry.async_on_unload(runtime_data.coordinator.async_add_listener(sync_devices))
     _cleanup_opted_out_entities(hass, entry)
+    _cleanup_retired_entities(hass, entry)
     _cleanup_stale_zone_entities(hass, entry, runtime_data.snapshot.state)
 
     reconcile_interval_s = int(
@@ -195,7 +198,7 @@ async def async_remove_config_entry_device(
 def _register_child_devices(
     hass: HomeAssistant,
     entry: HypercolorConfigEntry,
-    devices: tuple[Device, ...],
+    devices: tuple[DeviceSummary, ...],
 ) -> None:
     device_registry = dr.async_get(hass)
     runtime = entry.runtime_data
@@ -204,17 +207,11 @@ def _register_child_devices(
         **hub_device_info(runtime, entry.data),
     )
     for device in devices:
-        device_id = device.id
-        if not device_id:
+        if not device.id:
             continue
         device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
-            identifiers={(DOMAIN, child_device_identifier(runtime, device_id))},
-            name=device.name,
-            manufacturer="Hypercolor",
-            model=device.backend,
-            sw_version=device.firmware_version,
-            via_device=(DOMAIN, runtime.server.instance_id),
+            **child_device_info(runtime, device),
         )
 
 
@@ -238,6 +235,24 @@ def _cleanup_opted_out_entities(
             continue
         device_id = registry_entry.unique_id[len(prefix) : -len(suffix)]
         if device_id not in opted_in:
+            entity_registry.async_remove(registry_entry.entity_id)
+
+
+def _cleanup_retired_entities(
+    hass: HomeAssistant,
+    entry: HypercolorConfigEntry,
+) -> None:
+    """Drop registry rows for entities this integration no longer creates.
+
+    Profiles folded into scenes upstream, so the profile select has no
+    successor entity and would otherwise linger as a dead row after an
+    upgrade.
+    """
+    entity_registry = er.async_get(hass)
+    runtime = entry.runtime_data
+    retired = {f"{runtime.server.instance_id}:{suffix}" for suffix in RETIRED_UNIQUE_SUFFIXES}
+    for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
+        if registry_entry.unique_id in retired:
             entity_registry.async_remove(registry_entry.entity_id)
 
 

@@ -11,6 +11,7 @@ from hypercolor.models import ControlDefinition
 
 from .const import CONF_LIVE_CONTROLS_ENABLED, LIVE_CONTROL_IDS, OPTIONS_DEFAULTS
 from .entity import HypercolorEntity, hub_device_info
+from .light import control_id
 from .models import control_scalar
 from .runtime_data import HypercolorRuntimeData
 
@@ -56,19 +57,23 @@ class HypercolorLiveControlNumber(HypercolorEntity, NumberEntity):
     @property
     def native_min_value(self) -> float:
         control = self._control
-        return control.min if control is not None and control.min is not None else self._default(0)
+        if control is not None and isinstance(control.min_, (int, float)):
+            return float(control.min_)
+        return self._default(0)
 
     @property
     def native_max_value(self) -> float:
         control = self._control
-        return control.max if control is not None and control.max is not None else self._default(1)
+        if control is not None and isinstance(control.max_, (int, float)):
+            return float(control.max_)
+        return self._default(1)
 
     @property
     def native_step(self) -> float:
         control = self._control
-        return (
-            control.step if control is not None and control.step is not None else self._default(2)
-        )
+        if control is not None and isinstance(control.step, (int, float)):
+            return float(control.step)
+        return self._default(2)
 
     @property
     def native_value(self) -> float | None:
@@ -76,19 +81,22 @@ class HypercolorLiveControlNumber(HypercolorEntity, NumberEntity):
         active_effect = self.snapshot.state.active_effect
         if control is None or active_effect is None:
             return None
-        value = control_scalar(active_effect.control_values.get(control.id))
+        value = control_scalar(active_effect.control_values.get(control_id(control)))
         if value is None:
-            value = control_scalar(control.value)
-        if value is None:
-            value = control_scalar(control.default)
+            value = control_scalar(control.default_value)
         return float(value) if isinstance(value, (int, float)) else None
 
     async def async_set_native_value(self, value: float) -> None:
         control = self._control
-        if control is None:
+        active_effect = self.snapshot.state.active_effect
+        if control is None or active_effect is None:
             return
         await self._runtime.async_mutate(
-            lambda: self._runtime.client.update_controls({control.id: value})
+            lambda: self._runtime.client.patch_layer_controls(
+                active_effect.zone_id,
+                active_effect.layer_id,
+                {control_id(control): value},
+            )
         )
 
     @property
@@ -101,7 +109,7 @@ class HypercolorLiveControlNumber(HypercolorEntity, NumberEntity):
             (
                 control
                 for control in active_effect.controls
-                if expected in {_normalize(control.id), _normalize(control.label)}
+                if expected in {_normalize(control_id(control)), _normalize(control.name)}
             ),
             None,
         )

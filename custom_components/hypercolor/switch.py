@@ -7,7 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from hypercolor.models import Device
+from hypercolor.models import DeviceSummary
 
 from .const import CONF_CHANNELS_AUDIO
 from .entity import (
@@ -16,6 +16,7 @@ from .entity import (
     add_configured_device_entities,
     hub_device_info,
 )
+from .models import device_enabled
 from .runtime_data import HypercolorRuntimeData
 
 _AUDIO_DEVICE_DEFAULT = "default"
@@ -64,14 +65,14 @@ class HypercolorDeviceEnabledSwitch(HypercolorDeviceEntity, SwitchEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "enabled"
 
-    def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], device: Device) -> None:
+    def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], device: DeviceSummary) -> None:
         super().__init__(entry, device)
         runtime = entry.runtime_data
         self._attr_unique_id = f"{runtime.server.instance_id}:device:{self._device_id}:enabled"
 
     @property
     def is_on(self) -> bool | None:
-        return device.enabled if (device := self._device) is not None else None
+        return device_enabled(device) if (device := self._device) is not None else None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         async def operation() -> None:

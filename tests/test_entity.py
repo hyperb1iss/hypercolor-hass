@@ -21,7 +21,7 @@ from custom_components.hypercolor.entity import (
 from custom_components.hypercolor.light import HypercolorDeviceLight
 from custom_components.hypercolor.runtime_data import ConnectionSource, ConnectionState
 from custom_components.hypercolor.switch import HypercolorDeviceEnabledSwitch
-from hypercolor.models import Device
+from hypercolor.models import DeviceSummary
 
 
 def test_entity_availability_honors_source_outage_deadlines(monkeypatch) -> None:
@@ -195,11 +195,12 @@ def test_configured_device_entities_follow_live_discovery() -> None:
 
 def test_device_entities_become_unavailable_when_device_disappears() -> None:
     device = cast(
-        Device,
+        DeviceSummary,
         SimpleNamespace(
             id="wled-office",
             name="WLED Office",
-            backend="wled",
+            status="connected",
+            presentation=SimpleNamespace(label="WLED"),
             firmware_version="0.15.0",
         ),
     )

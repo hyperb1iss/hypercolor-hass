@@ -11,20 +11,40 @@ from homeassistant.components.light import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from hypercolor.models import ActiveEffect, ControlDefinition, Device, EffectSummary, Zone
+from hypercolor.models import (
+    ControlDefinition,
+    DeviceSummary,
+    EffectSummary,
+    ZoneResource,
+)
 
-from .brightness import daemon_to_ha, ha_to_daemon
+from .brightness import daemon_to_ha, fraction_to_ha, ha_to_daemon, ha_to_fraction
 from .entity import (
     HypercolorDeviceEntity,
     HypercolorEntity,
     add_configured_device_entities,
     hub_device_info,
 )
-from .models import CatalogIndex, control_scalar
+from .models import (
+    ActiveEffect,
+    CatalogIndex,
+    EffectLayer,
+    control_scalar,
+    device_enabled,
+    effect_layer,
+    zone_role,
+)
 from .runtime_data import HypercolorRuntimeData
+
+_CONTROL_KINDS = {
+    "toggle": "boolean",
+    "color_picker": "color",
+    "gradient_editor": "color",
+    "dropdown": "enum",
+    "slider": "number",
+}
 
 
 async def async_setup_entry(
@@ -83,7 +103,7 @@ class HypercolorMasterLight(HypercolorEntity, LightEntity):
 
     @property
     def brightness(self) -> int:
-        return daemon_to_ha(self.snapshot.state.status.global_brightness)
+        return fraction_to_ha(self.snapshot.state.brightness)
 
     @property
     def effect(self) -> str | None:
@@ -105,13 +125,12 @@ class HypercolorMasterLight(HypercolorEntity, LightEntity):
             "active_effect": state.active_effect_name,
             "active_effect_id": state.active_effect_id,
             "active_preset_id": state.active_preset_id,
-            "active_preset_modified": state.active_preset_modified,
             "active_effect_cover_image_url": cover_image_url,
             "device_count": state.status.device_count,
             "effect_image": cover_image_url,
             "scene_count": state.status.scene_count,
-            "active_scene": state.active_scene.name if state.active_scene is not None else None,
-            "active_scene_id": state.active_scene.id if state.active_scene is not None else None,
+            "active_scene": state.scene.name,
+            "active_scene_id": state.scene.id,
             "zone_count": len(state.renderable_zones),
             **effect_metadata(summary),
             "effect_controls": effect_controls_payload(state.active_effect),
@@ -126,7 +145,7 @@ class HypercolorMasterLight(HypercolorEntity, LightEntity):
         async def operation() -> None:
             client = self._runtime.client
             if ATTR_BRIGHTNESS in kwargs:
-                await client.set_brightness(ha_to_daemon(int(kwargs[ATTR_BRIGHTNESS])))
+                await client.set_brightness(ha_to_fraction(int(kwargs[ATTR_BRIGHTNESS])))
 
             effect = kwargs.get(ATTR_EFFECT)
             if effect:
@@ -153,7 +172,7 @@ class HypercolorDeviceLight(HypercolorDeviceEntity, LightEntity):
     _attr_has_entity_name = True
     _attr_name = None
 
-    def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], device: Device) -> None:
+    def __init__(self, entry: ConfigEntry[HypercolorRuntimeData], device: DeviceSummary) -> None:
         super().__init__(entry, device)
         runtime = entry.runtime_data
         self._attr_supported_color_modes = {ColorMode.BRIGHTNESS}
@@ -165,7 +184,7 @@ class HypercolorDeviceLight(HypercolorDeviceEntity, LightEntity):
 
     @property
     def is_on(self) -> bool | None:
-        return device.enabled and device.status != "off" if (device := self._device) else None
+        return device_enabled(device) if (device := self._device) is not None else None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         brightness = (
@@ -211,7 +230,7 @@ class HypercolorZoneLight(HypercolorEntity, LightEntity):
 
     @property
     def brightness(self) -> int | None:
-        return _zone_to_ha(zone.brightness) if (zone := self._zone) is not None else None
+        return fraction_to_ha(zone.brightness) if (zone := self._zone) is not None else None
 
     @property
     def is_on(self) -> bool | None:
@@ -219,10 +238,10 @@ class HypercolorZoneLight(HypercolorEntity, LightEntity):
 
     @property
     def effect(self) -> str | None:
-        zone = self._zone
-        if zone is None or zone.effect_id is None:
+        layer = self._effect_layer
+        if layer is None:
             return None
-        return self.snapshot.catalog.effects.label(zone.effect_id) or zone.effect_id
+        return self.snapshot.catalog.effects.label(layer.effect_id) or layer.effect_id
 
     @property
     def effect_list(self) -> list[str]:
@@ -231,19 +250,20 @@ class HypercolorZoneLight(HypercolorEntity, LightEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         zone = self._zone
-        scene = self.snapshot.state.active_scene
+        layer = self._effect_layer
         return {
             "zone_id": self._zone_id,
-            "role": zone.role if zone is not None else None,
-            "effect_id": zone.effect_id if zone is not None else None,
-            "preset_id": zone.preset_id if zone is not None else None,
-            "output_count": len(zone.layout.zones) if zone is not None else None,
-            "scene_id": scene.id if scene is not None else None,
+            "role": zone_role(zone) if zone is not None else None,
+            "effect_id": layer.effect_id if layer is not None else None,
+            "preset_id": layer.preset_id if layer is not None else None,
+            "layer_count": len(zone.layers) if zone is not None else None,
+            "member_count": len(zone.members) if zone is not None else None,
+            "scene_id": self.snapshot.state.scene.id,
         }
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         brightness = (
-            round(int(kwargs[ATTR_BRIGHTNESS]) / 255, 4) if ATTR_BRIGHTNESS in kwargs else None
+            ha_to_fraction(int(kwargs[ATTR_BRIGHTNESS])) if ATTR_BRIGHTNESS in kwargs else None
         )
         effect = kwargs.get(ATTR_EFFECT)
 
@@ -251,7 +271,6 @@ class HypercolorZoneLight(HypercolorEntity, LightEntity):
             client = self._runtime.client
             if brightness is not None or not self.is_on:
                 await client.update_zone(
-                    self._scene_id(),
                     self._zone_id,
                     brightness=brightness,
                     enabled=True if not self.is_on else None,
@@ -259,39 +278,34 @@ class HypercolorZoneLight(HypercolorEntity, LightEntity):
             if effect:
                 await client.apply_effect(
                     self.snapshot.catalog.effects.resolve(str(effect)),
-                    render_group=self._zone_id,
+                    zone=self._zone_id,
                 )
 
         await self._runtime.async_mutate(operation)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         async def operation() -> None:
-            await self._runtime.client.update_zone(
-                self._scene_id(),
-                self._zone_id,
-                enabled=False,
-            )
+            await self._runtime.client.update_zone(self._zone_id, enabled=False)
 
         await self._runtime.async_mutate(operation)
 
-    def _scene_id(self) -> str:
-        scene = self.snapshot.state.active_scene
-        if scene is None:
-            raise HomeAssistantError("No active Hypercolor scene")
-        return scene.id
+    @property
+    def _zone(self) -> ZoneResource | None:
+        return self.snapshot.state.zone(self._zone_id)
 
     @property
-    def _zone(self) -> Zone | None:
-        return self.snapshot.state.zone(self._zone_id)
+    def _effect_layer(self) -> EffectLayer | None:
+        zone = self._zone
+        return effect_layer(zone) if zone is not None else None
 
 
 def effect_metadata(effect: EffectSummary | None) -> dict[str, Any]:
     return {
         "effect_description": effect.description if effect is not None else None,
         "effect_publisher": effect.author if effect is not None else None,
-        "effect_audio_reactive": effect.audio_reactive if effect is not None else False,
+        "effect_audio_reactive": effect.audio_reactive is True if effect is not None else False,
         "effect_tags": list(effect.tags) if effect is not None else [],
-        "effect_category": effect.category if effect is not None else None,
+        "effect_category": str(effect.category) if effect is not None else None,
         "effect_version": effect.version if effect is not None else None,
     }
 
@@ -300,46 +314,43 @@ def effect_controls_payload(active_effect: ActiveEffect | None) -> list[dict[str
     if active_effect is None:
         return []
     return [
-        _control_payload(control, active_effect.control_values.get(control.id))
+        _control_payload(control, active_effect.control_values.get(control_id(control)))
         for control in active_effect.controls
     ]
+
+
+def control_id(control: ControlDefinition) -> str:
+    return control.id if isinstance(control.id, str) else control.name
 
 
 def _control_payload(control: ControlDefinition, live_value: Any) -> dict[str, Any]:
     value = control_scalar(live_value)
     if value is None:
-        value = control_scalar(control.value)
-    if value is None:
-        value = control_scalar(control.default)
+        value = control_scalar(control.default_value)
     payload = {
-        "id": control.id,
-        "label": control.label,
+        "id": control_id(control),
+        "label": control.name,
         "kind": _canonical_control_kind(control),
-        "min": control.min,
-        "max": control.max,
-        "step": control.step,
+        "min": _number_or_none(control.min_),
+        "max": _number_or_none(control.max_),
+        "step": _number_or_none(control.step),
         "value": value,
     }
-    if control.options is not None:
-        payload["options"] = list(control.options)
+    if isinstance(control.labels, list):
+        payload["options"] = list(control.labels)
     return payload
 
 
 def _canonical_control_kind(control: ControlDefinition) -> str:
-    if control.type in {"boolean", "bool", "toggle", "switch", "checkbox"}:
-        return "boolean"
-    if control.type in {"color", "color_picker", "colorpicker", "rgb", "rgba"}:
-        return "color"
-    if control.type in {"enum", "select", "dropdown", "combobox", "choice", "variant"}:
-        return "enum"
-    if control.type in {"number", "slider", "float", "int", "integer", "range"}:
-        return "number"
-    return "enum" if control.options else "other"
+    kind = _CONTROL_KINDS.get(str(control.control_type))
+    if kind is not None:
+        return kind
+    return "enum" if isinstance(control.labels, list) and control.labels else "other"
+
+
+def _number_or_none(value: Any) -> float | None:
+    return float(value) if isinstance(value, (int, float)) else None
 
 
 def first_id(index: CatalogIndex[EffectSummary]) -> str | None:
     return index.items[0].id if index.items else None
-
-
-def _zone_to_ha(brightness: float) -> int:
-    return max(0, min(255, round(brightness * 255)))
