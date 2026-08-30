@@ -17,7 +17,8 @@ from typing import Any
 
 import attrs
 from hypercolor._generated import models as generated
-from hypercolor._generated.types import Unset
+
+from hypercolor.models import Unset
 
 type JsonObject = dict[str, Any]
 
