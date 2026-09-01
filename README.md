@@ -75,7 +75,7 @@ built directly on this integration's catalog, live controls, and effect cover ar
 - Home Assistant **2026.4.4** or newer
 - Python **3.14.2 through 3.14.x** (HA's runtime range for this release)
 - A reachable Hypercolor daemon (default port `9420`) that serves the `/api/v1/scene`
-  and `/api/v1/output` resources, which means the 0.4 line (`0.4.0a1` or newer)
+  and `/api/v1/output` resources, which means version `0.4.0` or newer
 - Optional: an API key, if your daemon has auth turned on
 
 The daemon is the actual lighting engine, [hyperb1iss/hypercolor](https://github.com/hyperb1iss/hypercolor).
