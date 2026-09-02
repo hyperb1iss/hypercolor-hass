@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from hypercolor.models import (
+    ActivateSceneResponse,
     DeviceOrigin,
     DeviceSummary,
     DiagnoseResponse,
@@ -100,8 +101,15 @@ def device() -> JsonObject:
     )
 
 
-def scene_summary() -> JsonObject:
-    return minimal(SceneSummary, id="scene-evening", name="Evening")
+def scene_summary(*, scene_id: str = "scene-evening", name: str = "Evening") -> JsonObject:
+    return minimal(SceneSummary, id=scene_id, name=name)
+
+
+def activate_scene_response(scene_id: str, name: str) -> JsonObject:
+    """Echo the activation the daemon reports back, ref block and all."""
+    payload = minimal(ActivateSceneResponse, activated=True)
+    payload["scene"] = {"id": scene_id, "name": name}
+    return payload
 
 
 def zone(

@@ -61,7 +61,7 @@ built directly on this integration's catalog, live controls, and effect cover ar
 | - | - |
 | 💎 **Master light** | brightness + effect picker, with the daemon's stable id available as an attribute for templates |
 | 🦋 **Per-device lights** | opt in any device to its own light entity, registered as a child of the hub |
-| 🌊 **Scenes** | activate scenes, or snapshot the live scene into a saved one, all from a service |
+| 🌊 **Scenes** | every named scene and every catalog effect becomes a scene entity, which is what puts them in reach of Alexa and Google Home; services cover activation and snapshotting too |
 | 🎯 **Layouts & presets** | select from spatial layouts and per-effect presets, exposed as native select entities |
 | 🪄 **Live controls** | brightness, speed, hue shift, and intensity as Home Assistant number sliders that patch the running effect |
 | 🌙 **Audio reactivity** | binary sensor for beat events with configurable hold, sensor for energy, switch to toggle audio capture |
@@ -136,10 +136,27 @@ uses that product and instance name for its entity namespace:
 | `button.hypercolor_hyperia_stop_effect` | button | clear every renderable zone in the live scene |
 | `button.hypercolor_hyperia_discover_devices` | button | re-run device discovery |
 | `number.hypercolor_hyperia_brightness` / `speed` / `hue_shift` / `intensity` | number | live patches into the running effect |
+| `scene.hypercolor_hyperia_<scene>` | scene | activate one named daemon scene |
+| `scene.hypercolor_hyperia_effect_<effect>` | scene | apply one catalog effect to the live scene |
 
 Turning the master light off pauses output without discarding the live scene, its
 preset, or its controls. Turning it back on resumes that exact state. The Stop button is
 the separate, destructive action that empties the live scene's zones.
+
+### Scenes and voice assistants
+
+Every named scene on the daemon gets a scene entity, and every catalog effect gets one
+named `Effect: <name>`. Both track the daemon live: a scene added upstream shows up
+without a reload, and a deleted one takes its entity with it. Unique ids are built from
+the daemon's scene and effect ids, so renaming a scene keeps the entity, its history, and
+any automation pointing at it.
+
+The reason this is a platform rather than another service call is voice. Home Assistant
+exposes the `scene` domain to Alexa and Google Home by default and never exposes
+`select`, so the scene picker was invisible to both assistants. Alexa has no mapping for
+light effects at all, and Google reaches them only as a mode setting on the light rather
+than as something you can name. A scene entity per scene and per effect gives both
+assistants one addressable thing per look.
 
 ### Optional channels
 
