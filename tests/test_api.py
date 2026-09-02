@@ -9,6 +9,7 @@ from custom_components.hypercolor.api import (
     UnsupportedDaemonError,
     _normalize_server_info,
     async_validate_daemon,
+    url_host,
 )
 from tests.support import hypercolor_payloads as payloads
 
@@ -135,3 +136,53 @@ def _envelope(data: object) -> httpx.Response:
             },
         },
     )
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("hyperia.local", "hyperia.local"),
+        ("10.4.20.191", "10.4.20.191"),
+        ("2601:600:8280:4bb1:561f:6d17:5c7c:14b7", "[2601:600:8280:4bb1:561f:6d17:5c7c:14b7]"),
+        ("::1", "[::1]"),
+    ],
+)
+def test_url_host_brackets_only_ipv6_literals(host: str, expected: str) -> None:
+    assert url_host(host) == expected
+
+
+async def test_validate_daemon_reaches_an_ipv6_daemon() -> None:
+    seen: list[httpx.URL] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url)
+        if request.url.path == "/api/v1/system":
+            return _envelope({"identity": _identity(auth_required=False), "status": None})
+        return _envelope({"power": "running", "brightness": 0.8})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        server = await async_validate_daemon(
+            client,
+            host="2601:600:8280:4bb1:561f:6d17:5c7c:14b7",
+            port=9420,
+            api_key=None,
+        )
+
+    assert server.instance_id == "srv_1"
+    assert [(url.host, url.port, url.path) for url in seen] == [
+        ("2601:600:8280:4bb1:561f:6d17:5c7c:14b7", 9420, "/api/v1/system"),
+        ("2601:600:8280:4bb1:561f:6d17:5c7c:14b7", 9420, "/api/v1/output"),
+    ]
+
+
+async def test_validate_daemon_reports_unparseable_hosts_as_cannot_connect() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"data": {}}))
+    ) as client:
+        with pytest.raises(CannotConnectError):
+            await async_validate_daemon(
+                client,
+                host="hyperia:with:colons",
+                port=9420,
+                api_key=None,
+            )

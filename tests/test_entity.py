@@ -17,6 +17,7 @@ from custom_components.hypercolor.entity import (
     HypercolorEntity,
     HypercolorWebsocketEntity,
     add_configured_device_entities,
+    hub_device_info,
 )
 from custom_components.hypercolor.light import HypercolorDeviceLight
 from custom_components.hypercolor.runtime_data import ConnectionSource, ConnectionState
@@ -289,3 +290,12 @@ class _TestWebsocketEntity(HypercolorWebsocketEntity):
 
     def async_write_ha_state(self) -> None:
         self.writes += 1
+
+
+def test_hub_device_info_brackets_ipv6_configuration_url() -> None:
+    runtime: Any = SimpleNamespace(
+        server=SimpleNamespace(instance_id="srv_1", instance_name="Hyperia", version="0.4.0")
+    )
+    info = hub_device_info(runtime, {"host": "2601:600:8280:4bb1::14b7", "port": 9420})
+
+    assert info["configuration_url"] == "http://[2601:600:8280:4bb1::14b7]:9420"

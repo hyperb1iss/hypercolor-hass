@@ -13,6 +13,7 @@ from homeassistant.util import slugify
 
 from hypercolor.models import DeviceSummary
 
+from .api import url_host
 from .const import (
     CONF_DISCONNECT_GRACE_S,
     CONF_UNAVAILABLE_AFTER_S,
@@ -199,7 +200,7 @@ def hub_device_info(runtime: HypercolorRuntimeData, entry_data: Mapping[str, Any
         manufacturer="Hypercolor",
         model="Daemon",
         sw_version=runtime.server.version,
-        configuration_url=f"http://{entry_data['host']}:{entry_data['port']}",
+        configuration_url=f"http://{url_host(entry_data['host'])}:{entry_data['port']}",
     )
 
 

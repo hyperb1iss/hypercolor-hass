@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from ipaddress import IPv4Address
+from ipaddress import IPv4Address, IPv6Address
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
+import pytest
 from homeassistant.config_entries import SOURCE_USER, SOURCE_ZEROCONF, ConfigEntryState
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
@@ -177,6 +178,152 @@ async def test_zeroconf_flow_aborts_duplicate_instance(
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured"
     assert existing.data[CONF_HOST] == "192.168.1.50"
+
+
+def _zeroconf_discovery(*addresses: IPv4Address | IPv6Address) -> ZeroconfServiceInfo:
+    return ZeroconfServiceInfo(
+        ip_address=addresses[0],
+        ip_addresses=list(addresses),
+        port=9420,
+        hostname="hyperia.local.",
+        type="_hypercolor._tcp.local.",
+        name="Hyperia._hypercolor._tcp.local.",
+        properties={"id": b"srv-1", "name": b"Hyperia", "version": b"0.4.0"},
+    )
+
+
+IPV6_ADDRESS = IPv6Address("2601:600:8280:4bb1:561f:6d17:5c7c:14b7")
+
+
+async def test_zeroconf_flow_prefers_ipv4_over_a_newer_ipv6_address(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(config_flow, "_validate", AsyncMock(return_value=_server()))
+    monkeypatch.setattr(
+        "custom_components.hypercolor.async_setup_entry",
+        AsyncMock(return_value=True),
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_ZEROCONF},
+        data=_zeroconf_discovery(IPV6_ADDRESS, IPv4Address("10.4.20.191")),
+    )
+    assert result["step_id"] == "zeroconf_confirm"
+    assert (result["description_placeholders"] or {})[CONF_HOST] == "10.4.20.191"
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_HOST] == "10.4.20.191"
+
+
+async def test_zeroconf_flow_keeps_ipv6_when_it_is_all_the_daemon_offers(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(config_flow, "_validate", AsyncMock(return_value=_server()))
+    monkeypatch.setattr(
+        "custom_components.hypercolor.async_setup_entry",
+        AsyncMock(return_value=True),
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_ZEROCONF},
+        data=_zeroconf_discovery(IPv6Address("fe80::1"), IPV6_ADDRESS),
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_HOST] == str(IPV6_ADDRESS)
+
+
+async def test_zeroconf_flow_skips_unusable_addresses_of_both_families(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(config_flow, "_validate", AsyncMock(return_value=_server()))
+    monkeypatch.setattr(
+        "custom_components.hypercolor.async_setup_entry",
+        AsyncMock(return_value=True),
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_ZEROCONF},
+        data=_zeroconf_discovery(
+            IPv4Address("0.0.0.0"),  # noqa: S104
+            IPv4Address("169.254.10.10"),
+            IPv4Address("127.0.0.1"),
+            IPv4Address("224.0.0.251"),
+            IPv4Address("255.255.255.255"),
+            IPv6Address("::1"),
+            IPv6Address("ff02::fb"),
+            IPV6_ADDRESS,
+        ),
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_HOST] == str(IPV6_ADDRESS)
+
+
+@pytest.mark.parametrize(
+    "ipv4",
+    [
+        IPv4Address("10.4.20.191"),
+        IPv4Address("100.64.0.7"),
+        IPv4Address("203.0.113.9"),
+    ],
+)
+async def test_zeroconf_flow_accepts_any_unicast_ipv4_over_ipv6(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    monkeypatch,
+    ipv4: IPv4Address,
+) -> None:
+    monkeypatch.setattr(config_flow, "_validate", AsyncMock(return_value=_server()))
+    monkeypatch.setattr(
+        "custom_components.hypercolor.async_setup_entry",
+        AsyncMock(return_value=True),
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_ZEROCONF},
+        data=_zeroconf_discovery(IPV6_ADDRESS, ipv4),
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_HOST] == str(ipv4)
+
+
+async def test_zeroconf_rediscovery_keeps_the_entry_on_ipv4(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+) -> None:
+    existing = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="srv-1",
+        data={CONF_HOST: "10.4.20.191", CONF_PORT: 9420},
+    )
+    existing.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_ZEROCONF},
+        data=_zeroconf_discovery(IPV6_ADDRESS, IPv4Address("10.4.20.191")),
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert existing.data[CONF_HOST] == "10.4.20.191"
 
 
 async def test_options_flow_replaces_complete_option_set(

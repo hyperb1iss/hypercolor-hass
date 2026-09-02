@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ipaddress import IPv4Address, IPv6Address
 from typing import Any
 
 import voluptuous as vol
@@ -74,16 +75,17 @@ class HypercolorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if not instance_id:
             return self.async_abort(reason="missing_instance_id")
 
+        host = _discovery_host(discovery_info)
         await self.async_set_unique_id(instance_id)
         self._abort_if_unique_id_configured(
             updates={
-                CONF_HOST: discovery_info.host,
+                CONF_HOST: host,
                 CONF_PORT: discovery_info.port or DEFAULT_PORT,
             }
         )
 
         self._discovery = {
-            CONF_HOST: discovery_info.host,
+            CONF_HOST: host,
             CONF_NAME: properties.get("name", discovery_info.name),
             CONF_PORT: discovery_info.port or DEFAULT_PORT,
             "version": properties.get("version"),
@@ -296,6 +298,45 @@ class HypercolorOptionsFlow(config_entries.OptionsFlow):
                 }
             ),
         )
+
+
+def _discovery_host(discovery_info: ZeroconfServiceInfo) -> str:
+    """Pick the address a discovered daemon should be reached on.
+
+    mDNS lists every address the daemon answers on, most recently updated
+    first. A routable IPv4 address is the stable choice on a home network,
+    so it wins over IPv6 even when IPv6 was announced more recently. IPv6 is
+    only used when it is all the daemon offers.
+    """
+    candidates = [*discovery_info.ip_addresses]
+    if discovery_info.ip_address not in candidates:
+        candidates.append(discovery_info.ip_address)
+    usable = [address for address in candidates if _is_usable_unicast(address)]
+    for address in usable:
+        if isinstance(address, IPv4Address):
+            return str(address)
+    for address in usable:
+        if isinstance(address, IPv6Address):
+            return str(address)
+    return discovery_info.host
+
+
+def _is_usable_unicast(address: IPv4Address | IPv6Address) -> bool:
+    """True for an address a client could actually connect to.
+
+    Only address classes that can never carry a unicast connection are
+    rejected: link-local, loopback, multicast, unspecified, and reserved
+    (which covers broadcast). Everything else passes, so private, global,
+    and shared-address-space (100.64/10, the CGNAT and Tailscale range)
+    hosts all qualify.
+    """
+    return not (
+        address.is_link_local
+        or address.is_loopback
+        or address.is_multicast
+        or address.is_unspecified
+        or address.is_reserved
+    )
 
 
 async def _validate(flow: HypercolorConfigFlow, user_input: dict[str, Any]) -> ServerInfo:
