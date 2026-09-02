@@ -22,6 +22,7 @@ from .api import (
     InvalidAuthError,
     UnsupportedDaemonError,
     async_validate_daemon,
+    url_host,
 )
 from .const import (
     CONF_API_KEY,
@@ -73,7 +74,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HypercolorConfigEntry) -
         ) from exc
 
     client = HypercolorClient(
-        host=entry.data[CONF_HOST],
+        host=url_host(entry.data[CONF_HOST]),
         port=entry.data[CONF_PORT],
         api_key=entry.data.get(CONF_API_KEY),
         httpx_client=httpx_client,

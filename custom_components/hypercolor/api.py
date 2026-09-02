@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from ipaddress import ip_address
 from typing import Any, Never
 
 import httpx
@@ -26,6 +27,20 @@ class UnsupportedDaemonError(Exception):
     pass
 
 
+def url_host(host: str) -> str:
+    """Format a configured host for a URL authority.
+
+    IPv6 literals need brackets before a port can follow them; hostnames and
+    IPv4 addresses pass through untouched. Zeroconf can hand us either address
+    family, so every URL built from a stored host goes through here.
+    """
+    try:
+        address = ip_address(host)
+    except ValueError:
+        return host
+    return f"[{host}]" if address.version == 6 else host
+
+
 @dataclass(frozen=True, slots=True)
 class ServerInfo:
     instance_id: str
@@ -42,10 +57,11 @@ async def async_validate_daemon(
     port: int,
     api_key: str | None,
 ) -> ServerInfo:
-    root_url = f"http://{host}:{port}"
+    authority = url_host(host)
+    root_url = f"http://{authority}:{port}"
     try:
         system_response = await httpx_client.get(f"{root_url}/api/v1/system")
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         raise CannotConnectError from exc
 
     if system_response.status_code == httpx.codes.UNAUTHORIZED:
@@ -59,7 +75,7 @@ async def async_validate_daemon(
         raise CannotConnectError from exc
 
     client = HypercolorClient(
-        host=host,
+        host=authority,
         port=port,
         api_key=api_key,
         httpx_client=httpx_client,
