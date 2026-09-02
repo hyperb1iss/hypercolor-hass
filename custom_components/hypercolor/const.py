@@ -30,6 +30,7 @@ PLATFORMS = [
     Platform.BUTTON,
     Platform.SWITCH,
     Platform.NUMBER,
+    Platform.SCENE,
 ]
 
 LIVE_CONTROL_IDS = ("brightness", "speed", "hue_shift", "intensity")

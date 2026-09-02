@@ -49,6 +49,9 @@ class FakeHypercolorDaemon:
         }
         self.control_updates: list[dict[str, Any]] = []
         self.applied_effects: list[AppliedEffect] = []
+        self.scenes: list[JsonObject] = [payloads.scene_summary()]
+        self.effects: list[JsonObject] = payloads.effects()
+        self.activated_scenes: list[str] = []
         self.device_updates: list[DeviceUpdate] = []
         self.zone_updates: list[ZoneUpdate] = []
         self.pause_requests = 0
@@ -94,10 +97,10 @@ class FakeHypercolorDaemon:
             "GET /system": self._system,
             "GET /output": self._output,
             "POST /diagnose": payloads.diagnostics,
-            "GET /effects": lambda: self._complete(payloads.effects()),
+            "GET /effects": lambda: self._complete(list(self.effects)),
             "GET /devices": lambda: self._paged([payloads.device()], request),
             "GET /scene": self._scene,
-            "GET /scenes": lambda: self._complete([payloads.scene_summary()]),
+            "GET /scenes": lambda: self._complete(list(self.scenes)),
             "GET /layouts": lambda: self._paged([payloads.layout_summary()], request),
             "GET /layouts/active": payloads.layout,
             "GET /system/audio-devices": payloads.audio_devices,
@@ -105,6 +108,17 @@ class FakeHypercolorDaemon:
         if response := responses.get(route):
             return self._ok(response())
         return web.json_response({"error": {"code": "not_found", "message": route}}, status=404)
+
+    async def activate_scene(self, request: web.Request) -> web.Response:
+        scene_id = request.match_info["scene_id"]
+        scene = next((item for item in self.scenes if item["id"] == scene_id), None)
+        if scene is None:
+            return web.json_response(
+                {"error": {"code": "not_found", "message": scene_id}},
+                status=404,
+            )
+        self.activated_scenes.append(scene_id)
+        return self._ok(payloads.activate_scene_response(scene_id, str(scene["name"])))
 
     async def apply_effect(self, request: web.Request) -> web.Response:
         body = await _json_body(request)

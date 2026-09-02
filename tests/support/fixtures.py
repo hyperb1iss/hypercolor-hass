@@ -21,6 +21,7 @@ async def fake_daemon(
         daemon.apply_effect_preset,
     )
     app.router.add_post("/api/v1/effects/{effect_id}/apply", daemon.apply_effect)
+    app.router.add_post("/api/v1/scenes/{scene_id}/activate", daemon.activate_scene)
     app.router.add_patch(
         "/api/v1/scene/zones/{zone}/layers/{layer}/controls",
         daemon.patch_layer_controls,
