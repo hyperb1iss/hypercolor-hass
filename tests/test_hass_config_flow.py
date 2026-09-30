@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from custom_components import hypercolor
 from homeassistant.config_entries import SOURCE_USER, SOURCE_ZEROCONF, ConfigEntryState
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
@@ -329,7 +330,10 @@ async def test_zeroconf_rediscovery_keeps_the_entry_on_ipv4(
 async def test_options_flow_replaces_complete_option_set(
     hass: HomeAssistant,
     enable_custom_integrations: None,
+    monkeypatch,
 ) -> None:
+    # The flow reloads the entry on save; this entry has no daemon to set up against.
+    monkeypatch.setattr(hypercolor, "async_setup_entry", AsyncMock(return_value=True))
     entry = MockConfigEntry(domain=DOMAIN, options={**OPTIONS_DEFAULTS})
     entry.add_to_hass(hass)
 

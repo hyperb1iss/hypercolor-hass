@@ -118,8 +118,7 @@ async def test_daemon_devices_detach_through_the_ui_without_deprecated_calls(
     for name, device_id in (("hub", hub.id), ("child", child.id)):
         await client.send_json_auto_id(
             {
-                "type": "config/device_registry/remove_config_entry",
-                "config_entry_id": entry.entry_id,
+                "type": "config/device_registry/remove",
                 "device_id": device_id,
             }
         )
