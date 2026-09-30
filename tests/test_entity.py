@@ -48,6 +48,8 @@ def test_entity_availability_honors_source_outage_deadlines(monkeypatch) -> None
         ),
     )
     entity = _TestEntity(entry)
+    writes = _WriteCounter()
+    monkeypatch.setattr(entity, "async_write_ha_state", writes)
     entity.hass = cast(Any, SimpleNamespace())
 
     entity._availability_updated()
@@ -61,7 +63,7 @@ def test_entity_availability_honors_source_outage_deadlines(monkeypatch) -> None
     scheduled[0][1]()
 
     assert entity.available is False
-    assert entity.writes == 2
+    assert writes.count == 2
 
     state.set_connected(ConnectionSource.SNAPSHOT)
     state.set_connected(ConnectionSource.WEBSOCKET)
@@ -77,7 +79,7 @@ def test_entity_availability_honors_source_outage_deadlines(monkeypatch) -> None
     scheduled[-1][1]()
 
     assert entity.available is False
-    assert entity.writes == 4
+    assert writes.count == 4
 
 
 def test_websocket_entity_reschedules_against_original_outage(monkeypatch) -> None:
@@ -100,6 +102,8 @@ def test_websocket_entity_reschedules_against_original_outage(monkeypatch) -> No
         ),
     )
     entity = _TestWebsocketEntity(entry)
+    writes = _WriteCounter()
+    monkeypatch.setattr(entity, "async_write_ha_state", writes)
     entity.hass = cast(Any, SimpleNamespace())
 
     entity._connection_updated()
@@ -118,7 +122,7 @@ def test_websocket_entity_reschedules_against_original_outage(monkeypatch) -> No
     scheduled[-1][1]()
 
     assert entity.available is False
-    assert entity.writes == 3
+    assert writes.count == 3
 
 
 def test_connectivity_sensor_reschedules_against_original_outage(monkeypatch) -> None:
@@ -211,6 +215,7 @@ def test_device_entities_become_unavailable_when_device_disappears() -> None:
     runtime = SimpleNamespace(
         coordinator=SimpleNamespace(last_update_success=True),
         connection_state=state,
+        hub_device_id="hub-device-1",
         server=SimpleNamespace(instance_id="instance-1"),
         snapshot=SimpleNamespace(
             device=lambda device_id: (
@@ -275,21 +280,21 @@ class _Coordinator:
 
 
 class _TestEntity(HypercolorEntity):
-    def __init__(self, entry: Any) -> None:
-        super().__init__(entry)
-        self.writes = 0
-
-    def async_write_ha_state(self) -> None:
-        self.writes += 1
+    pass
 
 
 class _TestWebsocketEntity(HypercolorWebsocketEntity):
-    def __init__(self, entry: Any) -> None:
-        super().__init__(entry)
-        self.writes = 0
+    pass
 
-    def async_write_ha_state(self) -> None:
-        self.writes += 1
+
+class _WriteCounter:
+    """Stands in for the final `async_write_ha_state` on an entity instance."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    def __call__(self) -> None:
+        self.count += 1
 
 
 def test_hub_device_info_brackets_ipv6_configuration_url() -> None:

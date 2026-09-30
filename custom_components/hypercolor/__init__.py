@@ -203,10 +203,11 @@ def _register_child_devices(
 ) -> None:
     device_registry = dr.async_get(hass)
     runtime = entry.runtime_data
-    device_registry.async_get_or_create(
+    hub = device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
         **hub_device_info(runtime, entry.data),
     )
+    runtime.hub_device_id = hub.id
     for device in devices:
         if not device.id:
             continue

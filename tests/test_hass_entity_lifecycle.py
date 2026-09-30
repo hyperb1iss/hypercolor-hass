@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import pytest
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.hypercolor.const import DOMAIN
 from tests.support.hass import activate_entry, first_state, setup_entry
@@ -20,6 +21,27 @@ async def test_hub_entities_include_product_and_instance_namespace(
     master = first_state(hass, "light", lambda state: "active_effect_id" in state.attributes)
 
     assert master.entity_id == "light.hypercolor_hyperia"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_daemon_devices_link_to_the_hub_without_deprecated_calls(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    fake_daemon: FakeHypercolorDaemon,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    entry = await setup_entry(hass, port=fake_daemon.port)
+    registry = dr.async_get(hass)
+    hub = registry.async_get_device_by_identifier((DOMAIN, "srv_e2e"), entry.entry_id)
+    child = registry.async_get_device_by_identifier(
+        (DOMAIN, "srv_e2e:device:wled-studio"), entry.entry_id
+    )
+
+    assert hub is not None
+    assert child is not None
+    assert child.via_device_id == hub.id
+    assert entry.runtime_data.hub_device_id == hub.id
+    assert "Detected that custom integration" not in caplog.text
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 

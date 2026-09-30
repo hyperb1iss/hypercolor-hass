@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Home_Assistant-2026.4.4+-e135ff?style=for-the-badge&logo=homeassistant&logoColor=white" alt="Home Assistant">
+  <img src="https://img.shields.io/badge/Home_Assistant-2026.9.4+-e135ff?style=for-the-badge&logo=homeassistant&logoColor=white" alt="Home Assistant">
   <img src="https://img.shields.io/badge/HACS-Custom-80ffea?style=for-the-badge&logo=homeassistantcommunitystore&logoColor=black" alt="HACS">
   <img src="https://img.shields.io/badge/Python-3.14-ff6ac1?style=for-the-badge&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Local_Push-mDNS-50fa7b?style=for-the-badge&logo=zwave&logoColor=white" alt="Local push">
@@ -72,7 +72,7 @@ built directly on this integration's catalog, live controls, and effect cover ar
 
 ## 📡 Requirements
 
-- Home Assistant **2026.4.4** or newer
+- Home Assistant **2026.9.4** or newer
 - Python **3.14.2 through 3.14.x** (HA's runtime range for this release)
 - A reachable Hypercolor daemon (default port `9420`) that serves the `/api/v1/scene`
   and `/api/v1/output` resources, which means version `0.4.0` or newer
