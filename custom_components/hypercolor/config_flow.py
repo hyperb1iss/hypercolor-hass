@@ -206,7 +206,7 @@ class HypercolorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
 
-class HypercolorOptionsFlow(config_entries.OptionsFlow):
+class HypercolorOptionsFlow(config_entries.OptionsFlowWithReload):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._config_entry = config_entry
 

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import pytest
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
-from custom_components.hypercolor.const import DOMAIN
+from custom_components.hypercolor.const import CONF_API_KEY, CONF_RECONCILE_INTERVAL_S, DOMAIN
 from tests.support.hass import activate_entry, first_state, setup_entry
 from tests.support.hypercolor_daemon import FakeHypercolorDaemon
 from tests.support.hypercolor_payloads import PRIMARY_ZONE_ID
@@ -41,6 +45,90 @@ async def test_daemon_devices_link_to_the_hub_without_deprecated_calls(
     assert child is not None
     assert child.via_device_id == hub.id
     assert entry.runtime_data.hub_device_id == hub.id
+    assert "Detected that custom integration" not in caplog.text
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_reauth_stores_the_new_key_without_deprecated_calls(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    fake_daemon: FakeHypercolorDaemon,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    entry = await setup_entry(hass, port=fake_daemon.port)
+
+    result = await entry.start_reauth_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_API_KEY: "rotated-key"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert entry.data[CONF_API_KEY] == "rotated-key"
+    assert entry.state is ConfigEntryState.LOADED
+    assert "Detected that custom integration" not in caplog.text
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_options_change_reloads_the_entry_without_deprecated_calls(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    fake_daemon: FakeHypercolorDaemon,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    entry = await setup_entry(hass, port=fake_daemon.port)
+    original_runtime = entry.runtime_data
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {**entry.options, CONF_RECONCILE_INTERVAL_S: 120}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_RECONCILE_INTERVAL_S] == 120
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.runtime_data is not original_runtime
+    assert "Detected that custom integration" not in caplog.text
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+# Home Assistant's own http component still stores string app keys.
+@pytest.mark.filterwarnings("ignore::aiohttp.web_exceptions.NotAppKeyWarning")
+async def test_daemon_devices_detach_through_the_ui_without_deprecated_calls(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    fake_daemon: FakeHypercolorDaemon,
+    hass_ws_client: WebSocketGenerator,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    assert await async_setup_component(hass, "config", {})
+    entry = await setup_entry(hass, port=fake_daemon.port)
+    registry = dr.async_get(hass)
+    hub = registry.async_get_device_by_identifier((DOMAIN, "srv_e2e"), entry.entry_id)
+    child = registry.async_get_device_by_identifier(
+        (DOMAIN, "srv_e2e:device:wled-studio"), entry.entry_id
+    )
+    assert hub is not None
+    assert child is not None
+    client = await hass_ws_client(hass)
+
+    responses = {}
+    for name, device_id in (("hub", hub.id), ("child", child.id)):
+        await client.send_json_auto_id(
+            {
+                "type": "config/device_registry/remove_config_entry",
+                "config_entry_id": entry.entry_id,
+                "device_id": device_id,
+            }
+        )
+        responses[name] = await client.receive_json()
+
+    assert responses["hub"]["success"] is False
+    assert responses["child"]["success"] is True
+    assert registry.async_get(hub.id) is not None
+    assert registry.async_get(child.id) is None
     assert "Detected that custom integration" not in caplog.text
     assert await hass.config_entries.async_unload(entry.entry_id)
 

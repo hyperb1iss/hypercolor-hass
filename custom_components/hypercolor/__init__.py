@@ -104,7 +104,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: HypercolorConfigEntry) -
     )
     entry.runtime_data = runtime_data
     await coordinator.async_config_entry_first_refresh()
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     def sync_devices() -> None:
         _register_child_devices(hass, entry, runtime_data.snapshot.devices)
@@ -160,10 +159,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: HypercolorConfigEntry) 
     return unload_ok
 
 
-async def _async_update_listener(hass: HomeAssistant, entry: HypercolorConfigEntry) -> None:
-    await hass.config_entries.async_reload(entry.entry_id)
-
-
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if entry.version == 1 and entry.minor_version < 2:
         options = {**OPTIONS_DEFAULTS, **entry.options}
@@ -185,15 +180,7 @@ async def async_remove_config_entry_device(
 ) -> bool:
     runtime = entry.runtime_data
     hub_identifier = (DOMAIN, runtime.server.instance_id)
-    if hub_identifier in device_entry.identifiers:
-        return False
-
-    device_registry = dr.async_get(hass)
-    device_registry.async_update_device(
-        device_entry.id,
-        remove_config_entry_id=entry.entry_id,
-    )
-    return True
+    return hub_identifier not in device_entry.identifiers
 
 
 def _register_child_devices(
