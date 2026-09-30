@@ -40,7 +40,7 @@ def main() -> None:
         manifest["zeroconf"] == [{"type": "_hypercolor._tcp.local."}],
         "manifest zeroconf record must match the daemon advertisement",
     )
-    _require(hacs["homeassistant"] == "2026.4.4", "hacs.json must match the supported HA floor")
+    _require(hacs["homeassistant"] == "2026.9.4", "hacs.json must match the supported HA floor")
     _require("config" in strings, "strings.json must include config flow strings")
     _require(
         set(services) >= {"apply_effect", "set_control", "run_diagnostics"},

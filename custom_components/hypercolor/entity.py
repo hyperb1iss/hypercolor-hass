@@ -209,13 +209,15 @@ def hub_device_name(instance_name: str) -> str:
 
 
 def child_device_info(runtime: HypercolorRuntimeData, device: DeviceSummary) -> DeviceInfo:
+    if runtime.hub_device_id is None:
+        raise RuntimeError("the Hypercolor hub device must be registered before its devices")
     return DeviceInfo(
         identifiers={(DOMAIN, child_device_identifier(runtime, device.id))},
         name=device.name,
         manufacturer="Hypercolor",
         model=device.presentation.label,
         sw_version=_optional_str(device.firmware_version),
-        via_device=(DOMAIN, runtime.server.instance_id),
+        via_device_id=runtime.hub_device_id,
     )
 
 

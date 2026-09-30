@@ -489,7 +489,7 @@ def _repair_coordinator(
     *,
     unavailable_after_s: int,
 ) -> HypercolorCoordinator:
-    coordinator = object.__new__(HypercolorCoordinator)
+    coordinator: Any = object.__new__(HypercolorCoordinator)
     coordinator.hass = SimpleNamespace(async_create_task=asyncio.create_task)
     coordinator.config_entry = SimpleNamespace(
         entry_id="entry-1",

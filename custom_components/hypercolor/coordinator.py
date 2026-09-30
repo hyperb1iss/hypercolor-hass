@@ -333,7 +333,7 @@ async def websocket_loop(runtime: HypercolorRuntimeData, options: dict[str, Any]
                 await _process_ws_message(runtime, message, options)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             error = _normalize_websocket_error(exc)
             _mark_disconnected(runtime, error)
             if isinstance(error, HypercolorAuthenticationError):
