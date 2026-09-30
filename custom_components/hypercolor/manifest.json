@@ -10,6 +10,6 @@
   "issue_tracker": "https://github.com/hyperb1iss/hypercolor-hass/issues",
   "quality_scale": "bronze",
   "requirements": ["hypercolor>=0.6.0,<0.7.0"],
-  "version": "0.3.0",
+  "version": "0.4.0",
   "zeroconf": [{ "type": "_hypercolor._tcp.local." }]
 }
