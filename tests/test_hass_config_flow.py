@@ -15,7 +15,12 @@ from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.hypercolor import async_migrate_entry, config_flow
-from custom_components.hypercolor.api import CannotConnectError, InvalidAuthError, ServerInfo
+from custom_components.hypercolor.api import (
+    CannotConnectError,
+    HostNotAllowedError,
+    InvalidAuthError,
+    ServerInfo,
+)
 from custom_components.hypercolor.const import CONF_API_KEY, DOMAIN, OPTIONS_DEFAULTS
 
 
@@ -101,6 +106,7 @@ async def test_user_flow_reports_connection_and_auth_failures(
     for error, expected in (
         (CannotConnectError(), "cannot_connect"),
         (InvalidAuthError(), "invalid_auth"),
+        (HostNotAllowedError(), "host_not_allowed"),
     ):
         monkeypatch.setattr(config_flow, "_validate", AsyncMock(side_effect=error))
         result = await hass.config_entries.flow.async_init(
@@ -114,6 +120,31 @@ async def test_user_flow_reports_connection_and_auth_failures(
 
         assert result["type"] is FlowResultType.FORM
         assert result["errors"] == {"base": expected}
+
+
+async def test_reauth_reports_a_host_the_daemon_does_not_answer_to(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    monkeypatch,
+) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="srv-1",
+        data={CONF_HOST: "hyperia.lan", CONF_PORT: 9420, CONF_API_KEY: None},
+        options={**OPTIONS_DEFAULTS},
+    )
+    entry.add_to_hass(hass)
+    monkeypatch.setattr(config_flow, "_validate", AsyncMock(side_effect=HostNotAllowedError()))
+
+    result = await entry.start_reauth_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_API_KEY: "control-key"},
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm"
+    assert result["errors"] == {"base": "host_not_allowed"}
 
 
 async def test_zeroconf_flow_decodes_identity_and_confirms(

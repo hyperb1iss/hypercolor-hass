@@ -5,7 +5,7 @@ inputs:
   hypercolor-ref:
     description: Full Hypercolor client commit SHA
     required: false
-    default: 7d397a30223073de675bafa43f943ab4960c85cb
+    default: 86b60d94184b34ee8a5d6dd570c1755aa02c70e8
   hypercolor-token:
     description: Optional token for the Hypercolor repository
     required: false

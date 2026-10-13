@@ -19,6 +19,7 @@ from hypercolor.models import DeviceSummary
 
 from .api import (
     CannotConnectError,
+    HostNotAllowedError,
     InvalidAuthError,
     UnsupportedDaemonError,
     async_validate_daemon,
@@ -68,6 +69,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: HypercolorConfigEntry) -
         raise ConfigEntryNotReady from exc
     except InvalidAuthError as exc:
         raise ConfigEntryAuthFailed from exc
+    except HostNotAllowedError as exc:
+        # Retry like an unreachable daemon: adding the name to the daemon's
+        # allowlist fixes it without touching this entry.
+        raise ConfigEntryNotReady(
+            "The Hypercolor daemon does not answer to this host name without an "
+            "API key; add it to network.allowed_hosts or connect by IP address"
+        ) from exc
     except UnsupportedDaemonError as exc:
         raise ConfigEntryError(
             "The Hypercolor daemon does not expose the output resource"

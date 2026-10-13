@@ -28,6 +28,7 @@
     "error": {
       "cannot_connect": "Unable to connect to the Hypercolor daemon.",
       "invalid_auth": "The API key was rejected.",
+      "host_not_allowed": "Without an API key, the daemon answers only to its IP address and the names it knows. Connect by IP address, add this host name to network.allowed_hosts in the daemon's configuration, or set an API key on the daemon and enter it here.",
       "unsupported_daemon": "Update the Hypercolor daemon to a version that exposes the output resource."
     },
     "abort": {
