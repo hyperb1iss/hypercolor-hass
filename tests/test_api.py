@@ -5,6 +5,7 @@ import pytest
 
 from custom_components.hypercolor.api import (
     CannotConnectError,
+    HostNotAllowedError,
     InvalidAuthError,
     UnsupportedDaemonError,
     _normalize_server_info,
@@ -54,6 +55,41 @@ async def test_validate_daemon_rejects_malformed_payload() -> None:
             await async_validate_daemon(
                 client,
                 host="127.0.0.1",
+                port=9420,
+                api_key=None,
+            )
+
+
+async def test_validate_daemon_reports_a_host_the_daemon_does_not_answer_to() -> None:
+    refusal = {
+        "error": {
+            "code": "forbidden",
+            "message": "Host 'hyperia.lan:9420' is not a name this daemon answers to.",
+            "details": {"host": "hyperia.lan:9420", "setting": "network.allowed_hosts"},
+        }
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(403, json=refusal))
+    ) as client:
+        with pytest.raises(HostNotAllowedError):
+            await async_validate_daemon(
+                client,
+                host="hyperia.lan",
+                port=9420,
+                api_key=None,
+            )
+
+
+async def test_validate_daemon_treats_other_system_refusals_as_unreachable() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(403, json={"error": {"code": "forbidden"}})
+        )
+    ) as client:
+        with pytest.raises(CannotConnectError):
+            await async_validate_daemon(
+                client,
+                host="hyperia.lan",
                 port=9420,
                 api_key=None,
             )

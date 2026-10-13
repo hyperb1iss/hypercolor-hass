@@ -27,6 +27,14 @@ class UnsupportedDaemonError(Exception):
     pass
 
 
+class HostNotAllowedError(Exception):
+    """The daemon does not answer to this host name without an API key."""
+
+
+# The setting a keyless daemon names when it refuses a request's Host.
+HOST_ALLOWLIST_SETTING = "network.allowed_hosts"
+
+
 def url_host(host: str) -> str:
     """Format a configured host for a URL authority.
 
@@ -66,6 +74,8 @@ async def async_validate_daemon(
 
     if system_response.status_code == httpx.codes.UNAUTHORIZED:
         raise InvalidAuthError
+    if _is_host_refusal(system_response):
+        raise HostNotAllowedError
     if system_response.status_code >= httpx.codes.BAD_REQUEST:
         raise CannotConnectError
 
@@ -106,6 +116,22 @@ def _raise_client_validation_error(
     if unsupported_not_found and isinstance(error, HypercolorNotFoundError):
         raise UnsupportedDaemonError from error
     raise CannotConnectError from error
+
+
+def _is_host_refusal(response: httpx.Response) -> bool:
+    """Whether a keyless daemon refused the request's Host name.
+
+    Without an API key, a daemon answers only to its IP addresses and the
+    names it knows, and it refuses any other Host with 403, naming the
+    setting that would admit it.
+    """
+    if response.status_code != httpx.codes.FORBIDDEN:
+        return False
+    try:
+        details = response.json()["error"]["details"]
+    except KeyError, TypeError, ValueError:
+        return False
+    return isinstance(details, dict) and details.get("setting") == HOST_ALLOWLIST_SETTING
 
 
 def _system_payload(payload: Any) -> dict[str, Any]:

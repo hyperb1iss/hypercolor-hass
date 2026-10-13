@@ -14,6 +14,7 @@ from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .api import (
     CannotConnectError,
+    HostNotAllowedError,
     InvalidAuthError,
     ServerInfo,
     UnsupportedDaemonError,
@@ -165,6 +166,9 @@ class HypercolorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except InvalidAuthError:
             errors["base"] = "invalid_auth"
             return None
+        except HostNotAllowedError:
+            errors["base"] = "host_not_allowed"
+            return None
         except UnsupportedDaemonError:
             errors["base"] = "unsupported_daemon"
             return None
@@ -195,6 +199,9 @@ class HypercolorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return None
         except InvalidAuthError:
             errors["base"] = "invalid_auth"
+            return None
+        except HostNotAllowedError:
+            errors["base"] = "host_not_allowed"
             return None
         except UnsupportedDaemonError:
             errors["base"] = "unsupported_daemon"
