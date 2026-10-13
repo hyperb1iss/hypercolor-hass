@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.14.2, <3.15"
 
 [[package]]
@@ -1181,7 +1181,7 @@ types = [{ name = "ty", specifier = ">=0.0.42" }]
 
 [[package]]
 name = "hypercolor-hass"
-version = "0.5.0"
+version = "0.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "hypercolor" },
