@@ -249,12 +249,20 @@ class HypercolorZoneLight(HypercolorEntity, LightEntity):
         return self.snapshot.catalog.effects.options
 
     @property
+    def capability_attributes(self) -> dict[str, Any]:
+        # HA omits extra state attributes when a zone becomes unavailable.
+        zone = self._zone
+        return {
+            **super().capability_attributes,
+            "zone_id": self._zone_id,
+            "role": zone_role(zone) if zone is not None else None,
+        }
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any]:
         zone = self._zone
         layer = self._effect_layer
         return {
-            "zone_id": self._zone_id,
-            "role": zone_role(zone) if zone is not None else None,
             "effect_id": layer.effect_id if layer is not None else None,
             "preset_id": layer.preset_id if layer is not None else None,
             "layer_count": len(zone.layers) if zone is not None else None,
