@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "hypercolor-hass"
-version = "0.6.0"
+version = "0.7.0"
 description = "Home Assistant integration for Hypercolor RGB lighting orchestration"
 readme = "README.md"
 license = "Apache-2.0"
@@ -23,7 +23,7 @@ classifiers = [
     "Private :: Do Not Upload",
 ]
 dependencies = [
-    "hypercolor>=0.7.0,<0.8.0",
+    "hypercolor>=0.8.0,<0.9.0",
 ]
 
 [dependency-groups]
