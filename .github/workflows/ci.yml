@@ -52,7 +52,7 @@ jobs:
 
       - uses: ./.github/actions/setup-hypercolor
         with:
-          hypercolor-ref: ${{ vars.HYPERCOLOR_REF || '86b60d94184b34ee8a5d6dd570c1755aa02c70e8' }}
+          hypercolor-ref: ${{ vars.HYPERCOLOR_REF || '02d034412bde8359009538acbdeacf177d1759bd' }}
           hypercolor-token: ${{ secrets.HYPERCOLOR_TOKEN }}
 
       - name: Sync dependencies
@@ -138,13 +138,27 @@ jobs:
       needs.hassfest.result == 'success' &&
       (needs.hacs.result == 'success' || needs.hacs.result == 'skipped') }}
     needs: [workflow-quality, verify, pypi-compatibility, hassfest, hacs]
-    uses: hyperb1iss/shared-workflows/.github/workflows/github-release.yml@9edda2222785fe0351a26a07bf26a3385874d288
-    with:
-      attach-artifacts: true
-      artifact-pattern: dist
-      release-notes-model: claude-opus-5
-      release-notes-provider: anthropic
+    runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: write
-    secrets: inherit
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" dist/* --clobber
+          else
+            gh release create "${TAG}" dist/* --verify-tag \
+              --title "Hypercolor HASS ${TAG}" --generate-notes
+          fi
