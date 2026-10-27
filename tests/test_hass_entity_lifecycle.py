@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
+from homeassistant.components.light import LightEntityFeature
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -8,12 +11,72 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
-from custom_components.hypercolor.const import CONF_API_KEY, CONF_RECONCILE_INTERVAL_S, DOMAIN
+from custom_components.hypercolor.const import (
+    CONF_API_KEY,
+    CONF_RECONCILE_INTERVAL_S,
+    CONF_UNAVAILABLE_AFTER_S,
+    DOMAIN,
+)
+from hypercolor.models import SceneDocument
 from tests.support.hass import activate_entry, first_state, setup_entry
 from tests.support.hypercolor_daemon import FakeHypercolorDaemon
-from tests.support.hypercolor_payloads import PRIMARY_ZONE_ID
+from tests.support.hypercolor_payloads import PRIMARY_ZONE_ID, scene_document
 
 pytest_plugins = ("tests.support.fixtures",)
+
+
+@pytest.mark.parametrize("absent", [True, False], ids=["absent-zone", "disconnected-daemon"])
+async def test_unavailable_zone_publishes_presence_and_light_capabilities(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    fake_daemon: FakeHypercolorDaemon,
+    absent: bool,
+) -> None:
+    entry = await setup_entry(hass, port=fake_daemon.port, setup=False)
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, CONF_UNAVAILABLE_AFTER_S: 0}
+    )
+    await activate_entry(hass, entry)
+    try:
+        runtime = entry.runtime_data
+        original = runtime.snapshot
+        zone = first_state(
+            hass, "light", lambda state: state.attributes.get("zone_id") == PRIMARY_ZONE_ID
+        )
+        if absent:
+            runtime.coordinator.async_set_updated_data(
+                replace(
+                    original,
+                    state=replace(
+                        original.state, scene=SceneDocument.from_dict(scene_document([]))
+                    ),
+                )
+            )
+        else:
+            for source in runtime.connection_state.sources:
+                runtime.connection_state.set_disconnected(
+                    source, ConnectionError("daemon offline")
+                )
+        await hass.async_block_till_done()
+
+        unavailable = hass.states.get(zone.entity_id)
+        assert unavailable is not None
+        assert unavailable.state == "unavailable"
+        assert unavailable.attributes["zone_id"] == PRIMARY_ZONE_ID
+        assert unavailable.attributes["role"] == (None if absent else "primary")
+        assert unavailable.attributes["supported_color_modes"] == ["brightness"]
+        assert unavailable.attributes["supported_features"] == LightEntityFeature.EFFECT
+
+        if absent:
+            runtime.coordinator.async_set_updated_data(original)
+            await hass.async_block_till_done()
+            returned = hass.states.get(zone.entity_id)
+            assert returned is not None
+            assert returned.state == "on"
+            assert returned.attributes["role"] == "primary"
+            assert returned.attributes["zone_id"] == PRIMARY_ZONE_ID
+    finally:
+        assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def test_hub_entities_include_product_and_instance_namespace(
