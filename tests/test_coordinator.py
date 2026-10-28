@@ -387,8 +387,6 @@ class SnapshotClientFixture:
                     LayoutSummary,
                     id="layout-1",
                     name="Desk",
-                    canvas_width=640,
-                    canvas_height=480,
                     zone_count=1,
                 )
             )

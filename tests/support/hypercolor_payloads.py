@@ -168,8 +168,6 @@ def layout_summary() -> JsonObject:
         LayoutSummary,
         id="default",
         name="Default Layout",
-        canvas_width=640,
-        canvas_height=480,
         zone_count=1,
         is_active=True,
     )

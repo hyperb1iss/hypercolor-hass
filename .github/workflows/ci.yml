@@ -52,7 +52,7 @@ jobs:
 
       - uses: ./.github/actions/setup-hypercolor
         with:
-          hypercolor-ref: ${{ vars.HYPERCOLOR_REF || '02d034412bde8359009538acbdeacf177d1759bd' }}
+          hypercolor-ref: ${{ vars.HYPERCOLOR_REF || 'd86b8d71bdcb858b300e2f923fdaa29529a7398e' }}
           hypercolor-token: ${{ secrets.HYPERCOLOR_TOKEN }}
 
       - name: Sync dependencies
